@@ -84,7 +84,7 @@ class SoftTeacher(MultiSteamDetector):
         snames = [meta["filename"] for meta in student_data["img_metas"]]
         tidx = [tnames.index(name) for name in snames]
         with torch.no_grad():
-            teacher_info = self.extract_teacher_info(
+            teacher_info, stat = self.extract_teacher_info(
                 teacher_data["img"][
                     torch.Tensor(tidx).to(teacher_data["img"].device).long()
                 ],
@@ -96,10 +96,11 @@ class SoftTeacher(MultiSteamDetector):
                 teacher_data["captions"]
                 if ("captions" in teacher_data)
                 else None,
+                teacher_data["gt_bboxs"]
             )
         student_info = self.extract_student_info(**student_data)
 
-        return self.compute_pseudo_label_loss(student_info, teacher_info)
+        return self.compute_pseudo_label_loss(student_info, teacher_info), stat
 
     def compute_pseudo_label_loss(self, student_info, teacher_info):
         M = self._get_trans_mat(
@@ -369,7 +370,7 @@ class SoftTeacher(MultiSteamDetector):
         ]
         return student_info
 
-    def extract_teacher_info(self, img, img_metas, proposals=None, captions=None, **kwargs):
+    def extract_teacher_info(self, img, img_metas, proposals=None, captions=None, gt_bboxes=None **kwargs):
         teacher_info = {}
         feat = self.teacher.extract_feat(img)
         teacher_info["backbone_feature"] = feat
@@ -379,7 +380,7 @@ class SoftTeacher(MultiSteamDetector):
             )
             rpn_out = list(self.teacher.rpn_head(feat))
             proposal_list, statistics = self.teacher.rpn_head.get_bboxes_with_clip(
-                *rpn_out, img_metas=img_metas, img=img, captions=captions, cfg=proposal_cfg
+                *rpn_out, img_metas=img_metas, img=img, captions=captions, cfg=proposal_cfg, gt_bboxes=gt_bboxes
             )
         else:
             proposal_list = proposals
@@ -443,7 +444,7 @@ class SoftTeacher(MultiSteamDetector):
         teacher_info["img_metas"] = img_metas
         #teacher_info["language_similarities"] = language_sim
         
-        return teacher_info
+        return teacher_info, statistics
 
     def compute_uncertainty_with_aug(
         self, feat, img_metas, proposal_list, proposal_label_list

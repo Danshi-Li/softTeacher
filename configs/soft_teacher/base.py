@@ -184,9 +184,11 @@ weak_pipeline = [
 ]
 unsup_pipeline = [
     dict(type="LoadImageFromFile"),
-    # dict(type="LoadAnnotations", with_bbox=True),
-    # generate fake labels for data format compatibility
+    # To check softlabel quality against GT, load annotations at experimental phase. Should disable in product mode.
+    dict(type="LoadAnnotations", with_bbox=True),
     # dict(type="LoadCaptions", with_bbox=True),
+
+    # generate fake labels for data format compatibility
     dict(type="PseudoSamples", with_bbox=True),
     dict(
         type="MultiBranch", unsup_student=strong_pipeline, unsup_teacher=weak_pipeline

@@ -1,3 +1,5 @@
+import statistics
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -59,6 +61,7 @@ class CLIPRPNHead(RPNHead):
                    img,
                    captions=None,
                    cfg=None,
+                   gt_bboxes=None,
                    rescale=False):
         
         assert len(cls_scores) == len(bbox_preds)
@@ -70,6 +73,7 @@ class CLIPRPNHead(RPNHead):
             featmap_sizes, device=device)
 
         result_list = []
+        statistics = []
         for img_id in range(len(img_metas)):
             cls_score_list = [
                 cls_scores[i][img_id].detach() for i in range(num_levels)
@@ -80,11 +84,12 @@ class CLIPRPNHead(RPNHead):
             image = img[img_id]
             img_shape = img_metas[img_id]['img_shape']
             scale_factor = img_metas[img_id]['scale_factor']
-            proposals = self._get_bboxes_single_with_clip(cls_score_list, bbox_pred_list,
+            proposals, statistic = self._get_bboxes_single_with_clip(cls_score_list, bbox_pred_list,
                                                 mlvl_anchors, img_shape,
-                                                scale_factor, cfg, image, captions, rescale)
+                                                scale_factor, cfg, image, captions, gt_bboxes, rescale)
             result_list.append(proposals)
-        return result_list
+            statistics.append(statistic)
+        return result_list, statistics
 
     def _get_bboxes_single_with_clip(self,
                            cls_scores,
@@ -95,6 +100,7 @@ class CLIPRPNHead(RPNHead):
                            cfg,
                            img,
                            captions=None,
+                           gt_bboxes=None,
                            rescale=False):
 
         # TODO: before NMS, rank and threshold w.r.t. CLIP similarities
@@ -155,53 +161,81 @@ class CLIPRPNHead(RPNHead):
                 scores = scores[valid_inds]
                 ids = ids[valid_inds]
 
+        sim_before_nms = self._calculate_CLIP_similarity_single(img, proposals, batch_size=32)
+        # TODO: for each proposal, calculate its IOU with maximally overlapped gt bbox
+        IOU_before_nms = self._calculate_IOU(proposals, gt_bboxes)
+
         # TODO: remove the hard coded nms type
         nms_cfg = dict(type='nms', iou_thr=cfg["nms"]["iou_threshold"])
-
-        sim_before_nms = self._calculate_CLIP_similarity_single(img, proposals[:,:4], captions)
-
         dets, keep = batched_nms(proposals, scores, ids, nms_cfg)
-        # try nms with CLIP similarity thresholding
-        #nms_cfg = dict(type='nms', iou_thr=0.25)
-        #dets, keep = batched_nms(proposals, sim_before_nms, ids, nms_cfg) 
 
-        sim_after_nms = self._calculate_CLIP_similarity_single(img, dets[:,:4], captions)
+        sim_after_nms = self._calculate_CLIP_similarity_single(img, dets[:,:4], batch_size=32)
+        IOU_after_nms = self._calculate_IOU(dets[:,:4],gt_bboxes)
 
         statistics = {}
         statistics["sim_before_nms"] = sim_before_nms
-        statistics["score_before_nms"] = proposals[:,4]
-        statistics["sim_before_nms"] = sim_after_nms
-        statistics["score_before_nms"] = dets[:,4]
+        statistics["score_before_nms"] = scores
+        statistics["IOU_before_nms"] = IOU_before_nms
+        statistics["sim_after_nms"] = sim_after_nms
+        statistics["score_after_nms"] = dets[:,4]
+        statistics["IOU_after_nms"] = IOU_after_nms
         print(statistics)
 
-        return dets[:cfg["nms_post"]], statistics
+        return dets[:cfg["max_per_img"]], statistics
 
-    def _calculate_CLIP_similarity_single(self, image, bboxes, captions):
+    def _calculate_CLIP_similarity_single(self, image, bboxes, batch_size):
         # get CLIP similarity for proposals in a single image
-        texts = self.clip["captions"]
-        patchs = [tensor_to_PIL(image)
-                    .crop(
-                        (float(bbox[0]),
-                         float(bbox[1]),
-                         max(float(bbox[2]),float(bbox[0]+1.0)),
-                         max(float(bbox[3]),float(bbox[1]+1.0)))
-                         ) 
-                    for bbox in bboxes]
+        # TODO:ERROR: too many proposals -> too high GPU consumption
+        #             need to batchify calculation.
+        self.clip["model"].to(image.device)
+        image_PIL = tensor_to_PIL(image)
+        batch_cnt = (bboxes.size()[0] // batch_size) + 1
 
-        patchs = [self.clip["preprocess"](patch) for patch in patchs]
+        total_similarities = []
+        for i in range(batch_cnt):
+            texts = self.clip["captions"]
+            if i < (batch_cnt - 1):
+                patchs = [image_PIL
+                            .crop(
+                                (float(bbox[0]),
+                                float(bbox[1]),
+                                max(float(bbox[2]),float(bbox[0]+1.0)),
+                                max(float(bbox[3]),float(bbox[1]+1.0)))
+                                ) 
+                            for bbox in bboxes[i*batch_size:(i+1)*batch_size,:]]
+            else:
+                patchs = [image_PIL
+                            .crop(
+                                (float(bbox[0]),
+                                float(bbox[1]),
+                                max(float(bbox[2]),float(bbox[0]+1.0)),
+                                max(float(bbox[3]),float(bbox[1]+1.0)))
+                                ) 
+                            for bbox in bboxes[i*batch_size:,:]]
+
+            patchs = [self.clip["preprocess"](patch) for patch in patchs]
 
 
-        # go through CLIP
-        image_input = torch.tensor(np.stack(patchs)).to(image.device)
-        text_tokens = clip.tokenize(["This is " + desc for desc in texts]).to(image.device)
+            # go through CLIP
+            image_input = torch.tensor(np.stack(patchs)).to(image.device)
+            text_tokens = clip.tokenize(["This is " + desc for desc in texts]).to(image.device)
 
-        with torch.no_grad():
-            image_features = self.clip["model"].encode_image(image_input).float()
-            text_features = self.clip["model"].encode_text(text_tokens).float()
+            with torch.no_grad():
+                image_features = self.clip["model"].encode_image(image_input).float()
+                text_features = self.clip["model"].encode_text(text_tokens).float()
 
-        image_features /= image_features.norm(dim=-1, keepdim=True)
-        text_features /= text_features.norm(dim=-1, keepdim=True)
-        similarity = text_features.cpu().numpy() @ image_features.cpu().numpy().T
+            image_features /= image_features.norm(dim=-1, keepdim=True)
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+            # original calculation uses cpu version of matmul, which is not scalable for large ([80*512]x[512*32]) matmuls
+            # similarity = text_features.cpu().numpy() @ image_features.cpu().numpy().T
+            similarity = torch.matmul(image_features, text_features.permute(1,0))
+            similarity, _ = similarity.max(axis=0)
 
+            total_similarities.append(torch.Tensor(similarity))
         
-        return torch.Tensor(similarity.max(axis=0).to(image.device))
+        return torch.concat([t for t in total_similarities])
+
+
+    def _calculate_IOU(self, proposals, gt_bboxes):
+        # TODO: for each proposal, calculate its IOU with the maximally overlapped gt bbox.
+        return None
