@@ -102,6 +102,7 @@ def collate(batch, samples_per_gpu=1, flatten=False):
     2. cpu_only = False, stack = True, e.g., images tensors
     3. cpu_only = False, stack = False, e.g., gt bboxes
     """
+
     if not isinstance(batch, Sequence):
         raise TypeError(f"{batch.dtype} is not supported.")
 
@@ -149,7 +150,6 @@ def collate(batch, samples_per_gpu=1, flatten=False):
                     )
                 else:
                     raise ValueError("pad_dims should be either None or integers (1-3)")
-
         else:
             for i in range(0, len(batch), samples_per_gpu):
                 stacked.append(

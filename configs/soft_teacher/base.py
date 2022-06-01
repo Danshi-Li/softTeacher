@@ -1,6 +1,7 @@
 mmdet_base = "../../thirdparty/mmdetection/configs/_base_"
 _base_ = [
-    f"{mmdet_base}/models/faster_rcnn_r50_fpn.py",
+    # f"{mmdet_base}/models/faster_rcnn_r50_fpn.py",
+    f"faster_rcnn_r50_fpn_clip.py",
     f"{mmdet_base}/datasets/coco_detection.py",
     f"{mmdet_base}/schedules/schedule_1x.py",
     f"{mmdet_base}/default_runtime.py",
@@ -22,6 +23,7 @@ img_norm_cfg = dict(mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rg
 train_pipeline = [
     dict(type="LoadImageFromFile"),
     dict(type="LoadAnnotations", with_bbox=True),
+    # dict(type="LoadCaptions", with_bbox=True),
     dict(
         type="Sequential",
         transforms=[
@@ -58,6 +60,7 @@ train_pipeline = [
     dict(type="DefaultFormatBundle"),
     dict(
         type="Collect",
+        # keys=["img", "gt_bboxes", "gt_labels", "captions"],
         keys=["img", "gt_bboxes", "gt_labels"],
         meta_keys=(
             "filename",
@@ -131,6 +134,7 @@ strong_pipeline = [
     dict(type="DefaultFormatBundle"),
     dict(
         type="Collect",
+        # keys=["img", "gt_bboxes", "gt_labels", "captions"],
         keys=["img", "gt_bboxes", "gt_labels"],
         meta_keys=(
             "filename",
@@ -164,6 +168,7 @@ weak_pipeline = [
     dict(type="DefaultFormatBundle"),
     dict(
         type="Collect",
+        # keys=["img", "gt_bboxes", "gt_labels", "captions"],
         keys=["img", "gt_bboxes", "gt_labels"],
         meta_keys=(
             "filename",
@@ -181,6 +186,7 @@ unsup_pipeline = [
     dict(type="LoadImageFromFile"),
     # dict(type="LoadAnnotations", with_bbox=True),
     # generate fake labels for data format compatibility
+    # dict(type="LoadCaptions", with_bbox=True),
     dict(type="PseudoSamples", with_bbox=True),
     dict(
         type="MultiBranch", unsup_student=strong_pipeline, unsup_teacher=weak_pipeline
@@ -189,6 +195,7 @@ unsup_pipeline = [
 
 test_pipeline = [
     dict(type="LoadImageFromFile"),
+    # dict(type="LoadCaptions", with_bbox=True),
     dict(
         type="MultiScaleFlipAug",
         img_scale=(1333, 800),
@@ -258,7 +265,9 @@ custom_hooks = [
     dict(type="WeightSummary"),
     dict(type="MeanTeacher", momentum=0.999, interval=1, warm_up=0),
 ]
+# @Danshi: evaluation code raises error currently. Disable it by setting interval=180000 on debugging
 evaluation = dict(type="SubModulesDistEvalHook", interval=4000)
+# evaluation = dict(type="SubModulesDistEvalHook", interval=180000)
 optimizer = dict(type="SGD", lr=0.01, momentum=0.9, weight_decay=0.0001)
 lr_config = dict(step=[120000, 160000])
 runner = dict(_delete_=True, type="IterBasedRunner", max_iters=180000)
@@ -270,6 +279,7 @@ log_config = dict(
     interval=50,
     hooks=[
         dict(type="TextLoggerHook", by_epoch=False),
+        '''
         dict(
             type="WandbLoggerHook",
             init_kwargs=dict(
@@ -282,5 +292,6 @@ log_config = dict(
             ),
             by_epoch=False,
         ),
+        '''
     ],
 )
