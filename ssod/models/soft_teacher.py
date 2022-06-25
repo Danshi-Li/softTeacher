@@ -1,7 +1,4 @@
-import statistics
 import torch
-import json
-import clip
 from mmcv.runner.fp16_utils import force_fp32
 from mmdet.core import bbox2roi, multi_apply
 from mmdet.models import DETECTORS, build_detector
@@ -11,17 +8,6 @@ from ssod.utils import log_image_with_boxes, log_every_n
 
 from .multi_stream_detector import MultiSteamDetector
 from .utils import Transform2D, filter_invalid
-
-import numpy as np
-
-import torchvision.transforms as transforms
-
-unloader = transforms.ToPILImage()
-def tensor_to_PIL(tensor):
-    image = tensor.cpu().clone()
-    image = image.squeeze(0)
-    image = unloader(image)
-    return image
 
 
 @DETECTORS.register_module()
@@ -35,13 +21,6 @@ class SoftTeacher(MultiSteamDetector):
         if train_cfg is not None:
             self.freeze("teacher")
             self.unsup_weight = self.train_cfg.unsup_weight
-        
-        model, preprocess = clip.load("ViT-B/32")
-        model.cuda().eval()
-        self.clip_model = model
-        self.clip_preprocess = preprocess
-
-
 
     def forward_train(self, img, img_metas, **kwargs):
         super().forward_train(img, img_metas, **kwargs)
@@ -79,12 +58,11 @@ class SoftTeacher(MultiSteamDetector):
 
     def foward_unsup_train(self, teacher_data, student_data):
         # sort the teacher and student input to avoid some bugs
-
         tnames = [meta["filename"] for meta in teacher_data["img_metas"]]
         snames = [meta["filename"] for meta in student_data["img_metas"]]
         tidx = [tnames.index(name) for name in snames]
         with torch.no_grad():
-            teacher_info, stat = self.extract_teacher_info(
+            teacher_info = self.extract_teacher_info(
                 teacher_data["img"][
                     torch.Tensor(tidx).to(teacher_data["img"].device).long()
                 ],
@@ -93,14 +71,10 @@ class SoftTeacher(MultiSteamDetector):
                 if ("proposals" in teacher_data)
                 and (teacher_data["proposals"] is not None)
                 else None,
-                teacher_data["captions"]
-                if ("captions" in teacher_data)
-                else None,
-                teacher_data["gt_bboxs"]
             )
         student_info = self.extract_student_info(**student_data)
 
-        return self.compute_pseudo_label_loss(student_info, teacher_info), stat
+        return self.compute_pseudo_label_loss(student_info, teacher_info)
 
     def compute_pseudo_label_loss(self, student_info, teacher_info):
         M = self._get_trans_mat(
@@ -370,7 +344,7 @@ class SoftTeacher(MultiSteamDetector):
         ]
         return student_info
 
-    def extract_teacher_info(self, img, img_metas, proposals=None, captions=None, gt_bboxes=None **kwargs):
+    def extract_teacher_info(self, img, img_metas, proposals=None, **kwargs):
         teacher_info = {}
         feat = self.teacher.extract_feat(img)
         teacher_info["backbone_feature"] = feat
@@ -379,8 +353,8 @@ class SoftTeacher(MultiSteamDetector):
                 "rpn_proposal", self.teacher.test_cfg.rpn
             )
             rpn_out = list(self.teacher.rpn_head(feat))
-            proposal_list, statistics = self.teacher.rpn_head.get_bboxes_with_clip(
-                *rpn_out, img_metas=img_metas, img=img, captions=captions, cfg=proposal_cfg, gt_bboxes=gt_bboxes
+            proposal_list = self.teacher.rpn_head.get_bboxes(
+                *rpn_out, img_metas=img_metas, cfg=proposal_cfg
             )
         else:
             proposal_list = proposals
@@ -421,19 +395,9 @@ class SoftTeacher(MultiSteamDetector):
         reg_unc = self.compute_uncertainty_with_aug(
             feat, img_metas, proposal_list, proposal_label_list
         )
-        
-        '''
-        at here each bbox inside det_bboxes is a 1-dim len=5 tensor.
-        meanings are (TODO:check) [leftup_x,leftup_y,rightdown_x,rightdown_y,objectness_score]
-        each unc in reg_unc is a 1-dim len=4 tensor. values indicate variance of corresp corner coordinate
-        '''
-
         det_bboxes = [
             torch.cat([bbox, unc], dim=-1) for bbox, unc in zip(det_bboxes, reg_unc)
         ]
-        
-        #language_sim = self.compute_language_similarity(img, img_metas, proposal_list, proposal_label_list, captions)
-        
         det_labels = proposal_label_list
         teacher_info["det_bboxes"] = det_bboxes
         teacher_info["det_labels"] = det_labels
@@ -442,9 +406,7 @@ class SoftTeacher(MultiSteamDetector):
             for meta in img_metas
         ]
         teacher_info["img_metas"] = img_metas
-        #teacher_info["language_similarities"] = language_sim
-        
-        return teacher_info, statistics
+        return teacher_info
 
     def compute_uncertainty_with_aug(
         self, feat, img_metas, proposal_list, proposal_label_list
@@ -457,14 +419,13 @@ class SoftTeacher(MultiSteamDetector):
             auged.reshape(-1, auged.shape[-1]) for auged in auged_proposal_list
         ]
 
-        bboxes, labels = self.teacher.roi_head.simple_test_bboxes(
+        bboxes, _ = self.teacher.roi_head.simple_test_bboxes(
             feat,
             img_metas,
             auged_proposal_list,
             None,
             rescale=False,
         )
-
         reg_channel = max([bbox.shape[-1] for bbox in bboxes]) // 4
         bboxes = [
             bbox.reshape(self.train_cfg.jitter_times, -1, bbox.shape[-1])
@@ -475,7 +436,6 @@ class SoftTeacher(MultiSteamDetector):
 
         box_unc = [bbox.std(dim=0) for bbox in bboxes]
         bboxes = [bbox.mean(dim=0) for bbox in bboxes]
-        
         # scores = [score.mean(dim=0) for score in scores]
         if reg_channel != 1:
             bboxes = [
@@ -499,7 +459,6 @@ class SoftTeacher(MultiSteamDetector):
             else unc
             for unc, wh in zip(box_unc, box_shape)
         ]
-
         return box_unc
 
     @staticmethod
@@ -550,53 +509,3 @@ class SoftTeacher(MultiSteamDetector):
             unexpected_keys,
             error_msgs,
         )
-
-    def compute_language_similarity(self, img, img_metas, proposal_list, proposal_label_list, captions):
-        # @Danshi
-        # TODO: for each proposed ROI patch, calculate similarity with:
-        # 1. every caption given in dataset annotation
-        # 2. Prompted sentence with top-k class names of predicted object class.
-        #       concrete e.g. "Photo of a <CLS>", where <CLS> replaced with class name
-        # Use the maximum value in these as the language similarity confidence of given proposal.
-
-        similarities = []
-
-        for image, bbox_list in zip(img, proposal_list):
-            ### prepare text input
-            texts = captions
-
-            ### prepare image patch input
-            # check if bbox_list is non-empty
-            if bbox_list.size()[0] == 0:
-                similarities.append(torch.Tensor([]).to(image.device))
-                continue
-
-            # @Danshi if any of h or w is less than 1, scale up to 1
-            patchs = [tensor_to_PIL(image)
-                    .crop(
-                        (float(bbox[0]),
-                         float(bbox[1]),
-                         max(float(bbox[2]),float(bbox[0]+1.0)),
-                         max(float(bbox[3]),float(bbox[1]+1.0)))
-                         ) 
-                    for bbox in bbox_list]
-
-            patchs = [self.clip_preprocess(patch) for patch in patchs]
-
-
-            # go through CLIP
-            image_input = torch.tensor(np.stack(patchs)).to(image.device)
-            text_tokens = clip.tokenize(["This is " + desc for desc in texts]).to(image.device)
-
-            with torch.no_grad():
-                image_features = self.clip_model.encode_image(image_input).float()
-                text_features = self.clip_model.encode_text(text_tokens).float()
-
-            image_features /= image_features.norm(dim=-1, keepdim=True)
-            text_features /= text_features.norm(dim=-1, keepdim=True)
-            similarity = text_features.cpu().numpy() @ image_features.cpu().numpy().T
-
-            # TODO: obtain maximum similarity with all (auged) captions
-            similarities.append(torch.Tensor(similarity.max(axis=0)).to(image.device))
-        
-        return similarities

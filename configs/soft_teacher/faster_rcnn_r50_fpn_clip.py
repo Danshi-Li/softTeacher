@@ -11,6 +11,7 @@ model = dict(
         norm_eval=True,
         style='pytorch',
         init_cfg=dict(type='Pretrained', checkpoint='torchvision://resnet50')),
+        #init_cfg=dict(type='Pretrained', checkpoint='https://openaipublic.azureedge.net/clip/models/7e526bd135e493cef0776de27d5f42653e6b4c8bf9e0f653bb11773263205fdd/RN50x4.pt')),
     neck=dict(
         type='FPN',
         in_channels=[256, 512, 1024, 2048],
