@@ -9,8 +9,9 @@ from PIL import Image
 import numpy as np
 from collections import OrderedDict
 import torch
+import torchvision.transforms as transforms
+import torch.nn.functional as F
 import cv2
-from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor
 try:
     from torchvision.transforms import InterpolationMode
     BICUBIC = InterpolationMode.BICUBIC
@@ -21,13 +22,33 @@ except:
 def _convert_image_to_rgb(image):
     return image.convert("RGB")
 
-def preprocess_without_normalization(n_px):
-    return Compose([
-        Resize((n_px,n_px), interpolation=BICUBIC),
-        #CenterCrop(n_px),
-        _convert_image_to_rgb,
-        ToTensor(),
-    ])
+def preprocess_clip(self, img):
+        h, w = img.shape[1], img.shape[2]
+        if h > w:
+            padding_left = (h - w) // 2
+            padding_right = (h - w) - padding_left
+            img_padded = F.pad(img, (padding_left,padding_right),"constant", -0.45)
+        else:
+            padding_up = (- h + w) // 2
+            padding_down = (- h + w) - padding_up
+            img_padded = F.pad(img, (0,0,padding_up,padding_down),"constant", -0.45)
+        img_resized = transforms.Resize([224,224], interpolation=transforms.InterpolationMode.BICUBIC)(img_padded)
+
+        return img_resized.float()
+
+def preprocess_without_normalization(img):
+        h, w = img.shape[1], img.shape[2]
+        if h > w:
+            padding_left = (h - w) // 2
+            padding_right = (h - w) - padding_left
+            img_padded = F.pad(img, (padding_left,padding_right),"constant", -0.45)
+        else:
+            padding_up = (- h + w) // 2
+            padding_down = (- h + w) - padding_up
+            img_padded = F.pad(img, (0,0,padding_up,padding_down),"constant", -0.45)
+        img_resized = transforms.Resize([224,224], interpolation=transforms.InterpolationMode.BICUBIC)(img_padded)
+
+        return img_resized.float()
 
 CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
@@ -45,7 +66,8 @@ CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush')
 PROMPTS = ("photo of a [CLS]",)
 
-model, preprocess = clip.load("ViT-B/32")
+model, _ = clip.load("ViT-B/32")
+preprocess = preprocess_without_normalization
 model.cuda().eval()
 input_resolution = model.visual.input_resolution
 context_length = model.context_length
@@ -96,7 +118,7 @@ cam_input_tensor = (image_input,text_tokens)
 grayscale_cam = cam(input_tensor=cam_input_tensor, targets=targets)
 
 # bring the channels to the first dimension: (3,224,224) -> (224,224,3)
-visualization_input_img = preprocess_without_normalization(224)(image).permute(1,2,0).numpy()
+visualization_input_img = preprocess_without_normalization(image).permute(1,2,0).numpy()
 visualization = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True)
 cv2.imwrite("ViT_cam_overpaint.jpg", visualization)
 original_img = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True, mode="original")

@@ -1,6 +1,6 @@
-from .pytorch_grad_cam import GradCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
-from .pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
-from .pytorch_grad_cam.utils.image import show_cam_on_image
+from pytorch_grad_cam import GradCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
+from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from pytorch_grad_cam.utils.image import show_cam_on_image
 import clip
 import os
 #import skimage
@@ -11,6 +11,8 @@ from collections import OrderedDict
 import torch
 import cv2
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor
+import torchvision.transforms as transforms
+import torch.nn.functional as F
 try:
     from torchvision.transforms import InterpolationMode
     BICUBIC = InterpolationMode.BICUBIC
@@ -28,6 +30,28 @@ def preprocess_without_normalization(n_px):
         _convert_image_to_rgb,
         ToTensor(),
     ])
+
+def reshape_with_padding(img):
+    def add_margin(pil_img, top, right, bottom, left, color):
+        width, height = pil_img.size
+        new_width = width + right + left
+        new_height = height + top + bottom
+        result = Image.new(pil_img.mode, (new_width, new_height), color)
+        result.paste(pil_img, (left, top))
+        return result
+    h, w = img.size[1], img.size[0]
+    if h > w:
+        padding_left = (h - w) // 2
+        padding_right = (h - w) - padding_left
+        img_padded = add_margin(img,0,padding_right,0,padding_left,(0,0,0))
+    else:
+        padding_up = (- h + w) // 2
+        padding_down = (- h + w) - padding_up
+        img_padded = add_margin(img, padding_up,0,padding_down,0,(0,0,0))
+    img_resized = img_padded.resize((224,224),resample=Image.BICUBIC)
+
+    return img_resized
+        
 
 CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
@@ -62,7 +86,7 @@ for id in ids:
     image = Image.open(path).convert("RGB")
     # load original whole pictures
     original_images.append(image)
-    preprocessed_image = preprocess(image)
+    preprocessed_image = preprocess(reshape_with_padding(image))
     images.append(preprocessed_image)
 
 for cls in CLASSES:
@@ -96,7 +120,7 @@ cam_input_tensor = (image_input,text_tokens)
 grayscale_cam = cam(input_tensor=cam_input_tensor, targets=targets)
 
 # bring the channels to the first dimension: (3,224,224) -> (224,224,3)
-visualization_input_img = preprocess_without_normalization(224)(image).permute(1,2,0).numpy()
+visualization_input_img = preprocess_without_normalization(224)(reshape_with_padding(image)).permute(1,2,0).numpy()
 visualization = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True)
 cv2.imwrite("RN50_cam_overpaint.jpg", visualization)
 original_img = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True, mode="original")
