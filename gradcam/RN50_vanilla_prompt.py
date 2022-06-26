@@ -53,20 +53,22 @@ def reshape_with_padding(img):
     return img_resized
         
 
-CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
-               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
-               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
-               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
-               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
-               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
-               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
-               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
-               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush')
+CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',          #6
+               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',        #11
+               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',      #17
+               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',  #24
+               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',  #30
+               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',       #35
+               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',     #39
+               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',  #46
+               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',    #52
+               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',            #58
+               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',  #64
+               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',         #69
+               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',       #75
+               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush',)     #80
+
+#CLASSES = ("cat","dog")
 PROMPTS = ("photo of a [CLS]",)
 
 model, preprocess = clip.load("RN50")
@@ -75,7 +77,7 @@ input_resolution = model.visual.input_resolution
 context_length = model.context_length
 vocab_size = model.vocab_size
 
-ids = ["581921"]
+ids = ["350789"]
 original_images = []
 images = []
 texts = []
@@ -83,6 +85,7 @@ texts = []
 
 for id in ids:
     path = "/home/danshili/softTeacher/data/coco/train2017/" + "0"*(12-len(id)) + id + ".jpg"
+    #path = "cat_dog.jpg"
     image = Image.open(path).convert("RGB")
     # load original whole pictures
     original_images.append(image)
@@ -103,18 +106,10 @@ similarity = torch.matmul(text_features,image_features.permute(1,0))
 # beause CAM takes argmax w.r.t the last axis
 similarity = similarity.permute(1,0)
 
-target_layers = [model.visual.layer4[-1]]
-
-def reshape_transform(tensor, height=14, width=14):
-    result = tensor[:, 1 :  , :].reshape(tensor.size(0),
-        height, width, tensor.size(2))
-
-    # Bring the channels to the first dimension,
-    # like in CNNs.
-    result = result.transpose(2, 3).transpose(1, 2)
-    return result
+target_layers = [model.visual.layer4[0]]
 
 cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=True)
+#targets = [ClassifierOutputTarget(59)]
 targets = None
 cam_input_tensor = (image_input,text_tokens)
 grayscale_cam = cam(input_tensor=cam_input_tensor, targets=targets)
@@ -122,8 +117,8 @@ grayscale_cam = cam(input_tensor=cam_input_tensor, targets=targets)
 # bring the channels to the first dimension: (3,224,224) -> (224,224,3)
 visualization_input_img = preprocess_without_normalization(224)(reshape_with_padding(image)).permute(1,2,0).numpy()
 visualization = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True)
-cv2.imwrite("RN50_cam_overpaint.jpg", visualization)
+cv2.imwrite("RN50_extended_cam_cat_overpaint.jpg", visualization)
 original_img = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True, mode="original")
-cv2.imwrite("RN50_cam_original.jpg", original_img)
+cv2.imwrite("RN50_extended_cam_cat_original.jpg", original_img)
 class_specific_img = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True, mode="product")
-cv2.imwrite("RN50_cam_product.jpg", class_specific_img)
+cv2.imwrite("RN50_extended_cam_cat_product.jpg", class_specific_img)

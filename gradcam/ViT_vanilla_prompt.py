@@ -9,9 +9,10 @@ from PIL import Image
 import numpy as np
 from collections import OrderedDict
 import torch
+import cv2
+from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor
 import torchvision.transforms as transforms
 import torch.nn.functional as F
-import cv2
 try:
     from torchvision.transforms import InterpolationMode
     BICUBIC = InterpolationMode.BICUBIC
@@ -22,52 +23,54 @@ except:
 def _convert_image_to_rgb(image):
     return image.convert("RGB")
 
-def preprocess_clip(self, img):
-        h, w = img.shape[1], img.shape[2]
-        if h > w:
-            padding_left = (h - w) // 2
-            padding_right = (h - w) - padding_left
-            img_padded = F.pad(img, (padding_left,padding_right),"constant", -0.45)
-        else:
-            padding_up = (- h + w) // 2
-            padding_down = (- h + w) - padding_up
-            img_padded = F.pad(img, (0,0,padding_up,padding_down),"constant", -0.45)
-        img_resized = transforms.Resize([224,224], interpolation=transforms.InterpolationMode.BICUBIC)(img_padded)
+def preprocess_without_normalization(n_px):
+    return Compose([
+        Resize((n_px,n_px), interpolation=BICUBIC),
+        #CenterCrop(n_px),
+        _convert_image_to_rgb,
+        ToTensor(),
+    ])
 
-        return img_resized.float()
+def reshape_with_padding(img):
+    def add_margin(pil_img, top, right, bottom, left, color):
+        width, height = pil_img.size
+        new_width = width + right + left
+        new_height = height + top + bottom
+        result = Image.new(pil_img.mode, (new_width, new_height), color)
+        result.paste(pil_img, (left, top))
+        return result
+    h, w = img.size[1], img.size[0]
+    if h > w:
+        padding_left = (h - w) // 2
+        padding_right = (h - w) - padding_left
+        img_padded = add_margin(img,0,padding_right,0,padding_left,(0,0,0))
+    else:
+        padding_up = (- h + w) // 2
+        padding_down = (- h + w) - padding_up
+        img_padded = add_margin(img, padding_up,0,padding_down,0,(0,0,0))
+    img_resized = img_padded.resize((224,224),resample=Image.BICUBIC)
 
-def preprocess_without_normalization(img):
-        h, w = img.shape[1], img.shape[2]
-        if h > w:
-            padding_left = (h - w) // 2
-            padding_right = (h - w) - padding_left
-            img_padded = F.pad(img, (padding_left,padding_right),"constant", -0.45)
-        else:
-            padding_up = (- h + w) // 2
-            padding_down = (- h + w) - padding_up
-            img_padded = F.pad(img, (0,0,padding_up,padding_down),"constant", -0.45)
-        img_resized = transforms.Resize([224,224], interpolation=transforms.InterpolationMode.BICUBIC)(img_padded)
+    return img_resized
+        
 
-        return img_resized.float()
+CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',          #6
+               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',        #11
+               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',      #17
+               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',  #24
+               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',  #30
+               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',       #35
+               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',     #39
+               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',  #46
+               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',    #52
+               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',            #58
+               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',  #64
+               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',         #69
+               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',       #75
+               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush',)     #80
 
-CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
-               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',
-               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',
-               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',
-               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',
-               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',
-               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
-               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
-               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
-               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
-               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush')
 PROMPTS = ("photo of a [CLS]",)
 
-model, _ = clip.load("ViT-B/32")
-preprocess = preprocess_without_normalization
+model, preprocess = clip.load("ViT-B/32")
 model.cuda().eval()
 input_resolution = model.visual.input_resolution
 context_length = model.context_length
@@ -81,10 +84,11 @@ texts = []
 
 for id in ids:
     path = "/home/danshili/softTeacher/data/coco/train2017/" + "0"*(12-len(id)) + id + ".jpg"
+    #path = "cat_dog.jpg"
     image = Image.open(path).convert("RGB")
     # load original whole pictures
     original_images.append(image)
-    preprocessed_image = preprocess(image)
+    preprocessed_image = preprocess(reshape_with_padding(image))
     images.append(preprocessed_image)
 
 for cls in CLASSES:
@@ -103,25 +107,26 @@ similarity = similarity.permute(1,0)
 
 target_layers = [model.visual.transformer.resblocks[-1].ln_1]
 
-def reshape_transform(tensor, height=14, width=14):
-    result = tensor[:, 1 :  , :].reshape(tensor.size(0),
-        height, width, tensor.size(2))
-
+def reshape_transform(tensor, height=7, width=7):
+    result = tensor[1:, :  , :].reshape(
+        height, width, tensor.size(1), tensor.size(2)).permute(2,0,1,3)
+    
     # Bring the channels to the first dimension,
     # like in CNNs.
     result = result.transpose(2, 3).transpose(1, 2)
     return result
 
-cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=True)
+cam = GradCAMPlusPlus(model=model, target_layers=target_layers, reshape_transform=reshape_transform, use_cuda=True)
+#targets = [ClassifierOutputTarget(30)]
 targets = None
 cam_input_tensor = (image_input,text_tokens)
 grayscale_cam = cam(input_tensor=cam_input_tensor, targets=targets)
 
 # bring the channels to the first dimension: (3,224,224) -> (224,224,3)
-visualization_input_img = preprocess_without_normalization(image).permute(1,2,0).numpy()
+visualization_input_img = preprocess_without_normalization(224)(reshape_with_padding(image)).permute(1,2,0).numpy()
 visualization = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True)
-cv2.imwrite("ViT_cam_overpaint.jpg", visualization)
+cv2.imwrite("ViT_cam_noprompt_pug_overpaint.jpg", visualization)
 original_img = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True, mode="original")
-cv2.imwrite("ViT_cam_original.jpg", original_img)
+cv2.imwrite("ViT_cam_noprompt_pug_original.jpg", original_img)
 class_specific_img = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True, mode="product")
-cv2.imwrite("ViT_cam_product.jpg", class_specific_img)
+cv2.imwrite("ViT_cam_noprompt_pug_product.jpg", class_specific_img)

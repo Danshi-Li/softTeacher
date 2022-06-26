@@ -6,7 +6,7 @@ from pytorch_grad_cam.activations_and_gradients import ActivationsAndGradients
 from pytorch_grad_cam.utils.svd_on_activations import get_2d_projection
 from pytorch_grad_cam.utils.image import scale_cam_image
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 
 class BaseCAM:
@@ -128,7 +128,7 @@ class BaseCAM:
             if i < len(grads_list):
                 layer_grads = grads_list[i]
 
-            cam = self.get_cam_image(input_tensor[0],
+            cam = self.get_cam_image(input_tensor,
                                      target_layer,
                                      targets,
                                      layer_activations,

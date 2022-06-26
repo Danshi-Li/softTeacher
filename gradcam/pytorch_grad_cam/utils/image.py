@@ -36,7 +36,6 @@ def show_cam_on_image(img: np.ndarray,
     :param colormap: The OpenCV colormap to be used.
     :returns: The default image with the cam overlay.
     """
-    print(img)
     mask_uint8 = np.uint8(255*mask)[0]
     heatmap = cv2.applyColorMap(mask_uint8, colormap)
     if use_rgb:
