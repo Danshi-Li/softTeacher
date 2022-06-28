@@ -6,8 +6,8 @@ class ClassifierOutputTarget:
     def __init__(self, category):
         self.category = category
     def __call__(self, model_output):
+        # apply softmax to the vector of CLIP similarities
         model_output = torch.softmax(model_output,0,model_output.dtype)
-        print(model_output)
         if len(model_output.shape) == 1:
             return model_output[self.category]
         return model_output[:, self.category]

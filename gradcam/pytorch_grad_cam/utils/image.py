@@ -26,7 +26,8 @@ def show_cam_on_image(img: np.ndarray,
                       mask: np.ndarray,
                       use_rgb: bool = False,
                       colormap: int = cv2.COLORMAP_JET,
-                      mode = "overpaint") -> np.ndarray:
+                      mode = "overpaint",
+                      keep_ratio = 0.01) -> np.ndarray:
     """ This function overlays the cam mask on the image as an heatmap.
     By default the heatmap is in BGR format.
 
@@ -49,7 +50,7 @@ def show_cam_on_image(img: np.ndarray,
         cam = heatmap + img
     elif mode == "product":
         activation = mask.transpose((1,2,0))
-        cam = activation * activation * img
+        cam = activation * activation * img * (1 - keep_ratio) + img * keep_ratio
     elif mode == "original":
         cam = img
     cam = cam / np.max(cam)

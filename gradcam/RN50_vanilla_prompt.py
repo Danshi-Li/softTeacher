@@ -77,7 +77,7 @@ input_resolution = model.visual.input_resolution
 context_length = model.context_length
 vocab_size = model.vocab_size
 
-ids = ["350789"]
+ids = ["350789","581921"]
 original_images = []
 images = []
 texts = []
@@ -95,10 +95,10 @@ for id in ids:
 for cls in CLASSES:
     texts.append(PROMPTS[0].replace("[CLS]",cls))
 
-'''
-# CAM class does the forward pass for us. No need to execute it explicitely.
 image_input = torch.tensor(np.stack(images)).cuda()
 text_tokens = clip.tokenize([desc for desc in texts]).cuda()
+'''
+# CAM class does the forward pass for us. No need to execute it explicitely.
 image_features = model.encode_image(image_input).float()
 text_features = model.encode_text(text_tokens).float()
 image_features /= image_features.norm(dim=-1, keepdim=True)
@@ -108,20 +108,30 @@ similarity = torch.matmul(text_features,image_features.permute(1,0))
 # beause CAM takes argmax w.r.t the last axis
 similarity = similarity.permute(1,0)
 '''
-
+# if take multiple layers as target layer, final output activation map will be averaged over all those layers.
+# Note all activation maps are interpolated to that of original image. Can aggregate features of different resolotion.
 target_layers = [model.visual.layer4[0]]
 
 cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=True)
-#targets = [ClassifierOutputTarget(59)]
-targets = None
+
+# if take multiple classes as target, will sum gradients of each referred class. 
+# TODO: now all classes calculate activation map averaged over all target classes.
+# Can we decouple it? Can we get activation map of one image w.r.t one class, ane another image another class?  
+#targets = [ClassifierOutputTarget(22),ClassifierOutputTarget(31)]
+targets = None # If targets = None, take argmax as target class
+
+
 cam_input_tensor = (image_input,text_tokens)
 grayscale_cam = cam(input_tensor=cam_input_tensor, targets=targets)
+#print(grayscale_cam)  # 3-dim lists: [num_images, H, W]
 
-# bring the channels to the first dimension: (3,224,224) -> (224,224,3)
-visualization_input_img = preprocess_without_normalization(224)(reshape_with_padding(image)).permute(1,2,0).numpy()
-visualization = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True)
-cv2.imwrite("RN50_extended_cam_cat_overpaint.jpg", visualization)
-original_img = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True, mode="original")
-cv2.imwrite("RN50_extended_cam_cat_original.jpg", original_img)
-class_specific_img = show_cam_on_image(visualization_input_img, grayscale_cam, use_rgb=True, mode="product")
-cv2.imwrite("RN50_extended_cam_cat_product.jpg", class_specific_img)
+
+for i in range(len(ids)):
+    # bring the channels to the last dimension: (3,224,224) -> (224,224,3)
+    visualization_input_img = preprocess_without_normalization(224)(reshape_with_padding(original_images[i])).permute(1,2,0).numpy()
+    visualization = show_cam_on_image(visualization_input_img, grayscale_cam[np.newaxis,i])
+    cv2.imwrite(f"RN50_extended_cam_cat_overpaint_{ids[i]}.jpg", visualization)
+    original_img = show_cam_on_image(visualization_input_img, grayscale_cam[np.newaxis,i], mode="original")
+    cv2.imwrite(f"RN50_extended_cam_cat_original_{ids[i]}.jpg", original_img)
+    class_specific_img = show_cam_on_image(visualization_input_img, grayscale_cam[np.newaxis,i], mode="product")
+    cv2.imwrite(f"RN50_extended_cam_cat_product_{ids[i]}.jpg", class_specific_img)
