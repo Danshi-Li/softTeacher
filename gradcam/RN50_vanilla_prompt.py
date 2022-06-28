@@ -95,6 +95,8 @@ for id in ids:
 for cls in CLASSES:
     texts.append(PROMPTS[0].replace("[CLS]",cls))
 
+'''
+# CAM class does the forward pass for us. No need to execute it explicitely.
 image_input = torch.tensor(np.stack(images)).cuda()
 text_tokens = clip.tokenize([desc for desc in texts]).cuda()
 image_features = model.encode_image(image_input).float()
@@ -105,6 +107,7 @@ similarity = torch.matmul(text_features,image_features.permute(1,0))
 # (text,image) --> (image,text)
 # beause CAM takes argmax w.r.t the last axis
 similarity = similarity.permute(1,0)
+'''
 
 target_layers = [model.visual.layer4[0]]
 
