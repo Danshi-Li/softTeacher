@@ -9,8 +9,8 @@ from mmdet.models import DETECTORS, build_detector
 from ssod.utils.structure_utils import dict_split, weighted_loss
 from ssod.utils import log_image_with_boxes, log_every_n
 
-from .multi_stream_detector import MultiSteamDetector
-from .utils import Transform2D, filter_invalid
+from ..multi_stream_detector import MultiSteamDetector
+from ..utils import Transform2D, filter_invalid
 
 import numpy as np
 

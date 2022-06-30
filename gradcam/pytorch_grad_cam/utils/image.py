@@ -35,6 +35,7 @@ def show_cam_on_image(img: np.ndarray,
     :param mask: The cam mask.
     :param use_rgb: Whether to use an RGB or BGR heatmap, this should be set to True if 'img' is in RGB format.
     :param colormap: The OpenCV colormap to be used.
+    :param keep_ratio: The weight of original image signal kept for activated image input
     :returns: The default image with the cam overlay.
     """
     mask_uint8 = np.uint8(255*mask)[0]
