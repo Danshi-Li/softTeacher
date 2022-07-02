@@ -8,17 +8,17 @@ GPUS=$4
 FROM=$5
 PORT=${PORT:-29490}
 
-export CUDA_VISIBLE_DEVICES=2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 PYTHONPAT=H"$(dirname $0)/..":$PYTHONPATH
 
 if [[ ${TYPE} == 'baseline' ]]; then
     python -W ignore -m torch.distributed.launch --nproc_per_node=$GPUS --master_port=$PORT \
-        $(dirname "$0")/train.py configs/baseline/faster_rcnn_r50_caffe_fpn_coco_partial_180k.py --launcher pytorch \
+        $(dirname "$0")/train.py configs/baseline/faster_rcnn_r50_gradcam.py --launcher pytorch \
         --cfg-options fold=${FOLD} percent=${PERCENT} ${@:5}  \
         --work-dir "/home/danshili/softTeacher/SoftTeacher/work_dirs/tmp"
 else
     python -W ignore -m torch.distributed.launch --nproc_per_node=$GPUS --master_port=$PORT \
-        $(dirname "$0")/train.py configs/soft_teacher/soft_teacher_faster_rcnn_r50_caffe_fpn_coco_180k.py --launcher pytorch \
+        $(dirname "$0")/train.py configs/soft_teacher/soft_teacher_faster_rcnn_r50_gradcam.py --launcher pytorch \
         --cfg-options fold=${FOLD} percent=${PERCENT} ${@:5}  \
         --work-dir "/home/danshili/softTeacher/SoftTeacher/work_dirs/tmp"
 fi

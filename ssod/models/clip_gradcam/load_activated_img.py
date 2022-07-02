@@ -5,7 +5,7 @@ import numpy as np
 import pycocotools.mask as maskUtils
 
 from mmdet.core import BitmapMasks, PolygonMasks
-from ..builder import PIPELINES
+from mmdet.datasets.builder import PIPELINES
 
 try:
     from panopticapi.utils import rgb2id
@@ -55,16 +55,18 @@ class LoadCLIPActivatedImage:
 
         self.clip = {}
         model, preprocess = clip.load("RN50")
+        model.cuda().eval()
         texts = []
         for cls in self.CLASSES:
             texts.append(self.PROMPTS[0].replace("[CLS]",cls))
-        text_tokens = clip.tokenize([desc for desc in texts]).cuda()
+        text_tokens = clip.tokenize([desc for desc in texts])
         self.clip['model'] = model
         self.clip['preprocess'] = preprocess
         self.clip['texts'] = text_tokens
 
         target_layers = [model.visual.layer4[0]]
-        self.cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=True)
+        self.cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=False)
+        print("LoadCLIPActivatedImage init successful")
 
 
     def __call__(self,results):
@@ -82,22 +84,22 @@ class LoadCLIPActivatedImage:
         #        (meanwhile deleting activation maps that are too small in magnitude)
         #        The final output is indeterministic in its numbers
         img = self.reshape_with_padding(results['img'])
-        image_input = torch.Tensor(img).cuda()
-        cam_input_tensor = (image_input,self.clip['text'])
+        img = img.transpose(2,0,1)
+        image_input = torch.Tensor(np.stack([img]))
+        cam_input_tensor = (image_input.cuda(),self.clip['texts'].cuda())
 
         activation_map = []
         for cls in range(len(self.CLASSES)):
             targets = [ClassifierOutputTarget(cls),]
             grayscale_cam = self.cam(input_tensor=cam_input_tensor, targets=targets)
-            if grayscale_cam is not None:    # if activation map output is greater than a threshold magnitude
+            if np.max(grayscale_cam) > 0:    # if activation map output is greater than a threshold magnitude
                 activation_map.append(grayscale_cam)
 
         # step2: For each valid activation maps, compute the activated images and put into pipeline
-        img_activated = [torch.Tensor(
-                        show_cam_on_image(self.clip['preprocess'](img).permute(1,2,0).numpy(),activation, mode="product")
-                        ) for activation in activation_map]
-        print(img_activated)
+        img_activated = [show_cam_on_image(self.clip['preprocess'](img).permute(1,2,0).numpy(),activation, mode="product")
+                        for activation in activation_map]
         results["img_activated"] = img_activated
+        print(img_activated)
         return results
 
     def reshape_with_padding(self,img):
@@ -108,6 +110,8 @@ class LoadCLIPActivatedImage:
             result = Image.new(pil_img.mode, (new_width, new_height), color)
             result.paste(pil_img, (left, top))
             return result
+
+        img = Image.fromarray(img)
         h, w = img.size[1], img.size[0]
         if h > w:
             padding_left = (h - w) // 2
@@ -119,7 +123,7 @@ class LoadCLIPActivatedImage:
             img_padded = add_margin(img, padding_up,0,padding_down,0,(0,0,0))
         img_resized = img_padded.resize((224,224),resample=Image.BICUBIC)
 
-        return img_resized
+        return np.asarray(img_resized)
 
     def _convert_image_to_rgb(self,image):
         return image.convert("RGB")
