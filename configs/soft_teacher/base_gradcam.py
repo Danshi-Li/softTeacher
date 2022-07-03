@@ -182,9 +182,8 @@ weak_pipeline = [
 ]
 unsup_pipeline = [
     dict(type="LoadImageFromFile"),
-    dict(type="LoadCLIPActivatedImage"),
-    # generate fake labels for data format compatibility
-    # dict(type="PseudoSamples", with_bbox=True),
+    # dict(type="LoadCLIPActivatedImage"),
+    dict(type="PseudoSamples", with_bbox=True),
     dict(
         type="MultiBranch", unsup_student=strong_pipeline, unsup_teacher=weak_pipeline
     ),
@@ -192,7 +191,6 @@ unsup_pipeline = [
 
 test_pipeline = [
     dict(type="LoadImageFromFile"),
-    # dict(type="LoadCaptions", with_bbox=True),
     dict(
         type="MultiScaleFlipAug",
         img_scale=(1333, 800),
@@ -241,7 +239,7 @@ data = dict(
 )
 
 semi_wrapper = dict(
-    type="SoftTeacher",
+    type="SoftTeacherGradCAM",
     model="${model}",
     train_cfg=dict(
         use_teacher_proposal=False,

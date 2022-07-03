@@ -102,7 +102,6 @@ class PseudoCocoDataset(CocoDataset):
         img_id = self.data_infos[idx]['id']
         ann_ids = self.coco.get_ann_ids(img_ids=[img_id])
         ann_info = self.coco.load_anns(ann_ids)
-        print(idx)
         print(self._parse_ann_info(self.data_infos[idx], ann_info))
         raise ValueError("check get_ann_info internal vars")
 

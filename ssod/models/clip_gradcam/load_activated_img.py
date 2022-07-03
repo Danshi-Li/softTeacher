@@ -1,8 +1,5 @@
-import os.path as osp
-
 import mmcv
 import numpy as np
-import pycocotools.mask as maskUtils
 
 from mmdet.core import BitmapMasks, PolygonMasks
 from mmdet.datasets.builder import PIPELINES
@@ -15,7 +12,6 @@ except ImportError:
 import torch
 import clip
 from PIL import Image
-from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor
 from pytorch_grad_cam import GradCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
@@ -99,7 +95,6 @@ class LoadCLIPActivatedImage:
         img_activated = [show_cam_on_image(self.clip['preprocess'](img).permute(1,2,0).numpy(),activation, mode="product")
                         for activation in activation_map]
         results["img_activated"] = img_activated
-        print(img_activated)
         return results
 
     def reshape_with_padding(self,img):
