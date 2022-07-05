@@ -140,7 +140,7 @@ class BaseCAM:
 
         return cam_per_target_layer
 
-    def aggregate_multi_layers(self, cam_per_target_layer: np.ndarray) -> np.ndarray:
+    def aggregate_multi_layers(self, cam_per_target_layer: np.ndarray, grad_thr=1e-3) -> np.ndarray:
         cam_per_target_layer = np.concatenate(cam_per_target_layer, axis=1)
         cam_per_target_layer = np.maximum(cam_per_target_layer, 0)
         result = np.mean(cam_per_target_layer, axis=1)

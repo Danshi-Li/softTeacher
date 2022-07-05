@@ -7,9 +7,11 @@ class ClassifierOutputTarget:
         self.category = category
     def __call__(self, model_output):
         # apply softmax to the vector of CLIP similarities
-        model_output = torch.softmax(model_output,0,model_output.dtype)
+        
         if len(model_output.shape) == 1:
+            model_output = torch.softmax(model_output,0,model_output.dtype)
             return model_output[self.category]
+        model_output = torch.softmax(model_output,1,model_output.dtype)
         return model_output[:, self.category]
 
 class SemanticSegmentationTarget:

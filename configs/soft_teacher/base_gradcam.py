@@ -272,7 +272,7 @@ log_config = dict(
     interval=50,
     hooks=[
         dict(type="TextLoggerHook", by_epoch=False),
-        
+        '''
         dict(
             type="WandbLoggerHook",
             init_kwargs=dict(
@@ -285,6 +285,7 @@ log_config = dict(
             ),
             by_epoch=False,
         ),
+        '''
         
     ],
 )

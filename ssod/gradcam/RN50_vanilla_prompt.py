@@ -94,7 +94,6 @@ for id in ids:
 
 for cls in CLASSES:
     texts.append(PROMPTS[0].replace("[CLS]",cls))
-
 image_input = torch.tensor(np.stack(images)).cuda()
 text_tokens = clip.tokenize([desc for desc in texts]).cuda()
 '''

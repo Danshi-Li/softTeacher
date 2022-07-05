@@ -1,4 +1,6 @@
+import copy
 import torch
+import random
 from mmcv.runner.fp16_utils import force_fp32
 from mmdet.core import bbox2roi, multi_apply
 from mmdet.models import DETECTORS, build_detector
@@ -11,6 +13,7 @@ from .utils import Transform2D, filter_invalid
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor
 
 import mmcv
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -20,9 +23,9 @@ except ImportError:
     rgb2id = None
 
 import clip
-from pytorch_grad_cam import GradCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
-from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
-from pytorch_grad_cam.utils.image import show_cam_on_image
+from ..gradcam.pytorch_grad_cam import GradCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
+from ..gradcam.pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+from ..gradcam.pytorch_grad_cam.utils.image import show_cam_on_image
 from .soft_teacher_backup import SoftTeacher
 
 
@@ -64,7 +67,7 @@ class SoftTeacherGradCAM(SoftTeacher):
         texts = []
         for cls in self.CLASSES:
             texts.append(self.PROMPTS[0].replace("[CLS]",cls))
-        text_tokens = clip.tokenize([desc for desc in texts])
+        text_tokens = clip.tokenize([desc for desc in texts]).cuda()
         self.clip['model'] = model
         self.clip['preprocess'] = preprocess
         self.clip['texts'] = text_tokens
@@ -108,30 +111,149 @@ class SoftTeacherGradCAM(SoftTeacher):
         return loss
 
     def load_gradcam_activated_img(self, results):
-
-        filename = [m['filename'] for m in results['img_metas']]
-        images = [Image.open(filename[i]) for i in range(len(filename))]
-
-        img_activated = []
+        
+        images = results['img']
+        activation_maps = []
         for img in images:
-            img = self.reshape_with_padding(img)
-            image_input = torch.Tensor(np.stack([self.clip['preprocess'](img)]))
-            cam_input_tensor = (image_input.cuda(),self.clip['texts'].cuda())
+            # deep copy
+            img_intformat = copy.deepcopy(img).permute(1,2,0).cpu().numpy()
+            mean = results['img_metas'][0]['img_norm_cfg']['mean']
+            std = results['img_metas'][0]['img_norm_cfg']['std']
+            img_intformat = img_intformat * std
+            img_intformat = img_intformat + mean
+            img_intformat = Image.fromarray(np.uint8(img_intformat))
 
+            img_intformat = self.reshape_with_padding(img_intformat)
+            image_input = torch.Tensor(np.stack([self.clip['preprocess'](img_intformat)])).cuda()
+
+            # First run: find out all classes with probability >0.01
+            # With all survived classes, calculate activation map
+            score, _ = self.clip['model'](image_input,self.clip['texts'])
+            score_softmax = torch.softmax(score[0],0,score.dtype)
+            y=torch.Tensor(range(score_softmax.shape[0]))
+            all_cls = y[score_softmax>0.01].tolist()
+
+            cam_input_tensor = (image_input,self.clip['texts'])
             activation_map = []
-            for cls in range(len(self.CLASSES)):
-                targets = [ClassifierOutputTarget(cls),]
+            for cls in all_cls:
+                targets = [ClassifierOutputTarget(int(cls)),]
                 grayscale_cam = self.cam(input_tensor=cam_input_tensor, targets=targets)
-                if np.max(grayscale_cam) > 0:    # if activation map output is greater than a threshold magnitude
-                    activation_map.append(grayscale_cam)
-
+                if np.max(grayscale_cam) > 0.99:    # if activation map is not all-zero
+                    # TODO: for each activation map, resize it back to match the shape of original images.
+                    #       It would do to centercrop off the padding and then interpolate to original shape.
+                    #       Also, should visualize to check it indeed matches the original image. (Watch out for Augmentations!)
+                    activated_img = show_cam_on_image(self.preprocess_without_normalization(224)(img_intformat).permute(1,2,0).numpy(),grayscale_cam, mode="product").transpose(2,0,1)
+                    activated_img = Image.fromarray(activated_img.transpose(1,2,0))
+                    h = int(img.shape[1])
+                    w = int(img.shape[2])
+                    if h > w:
+                        activated_img = self.preprocess_without_normalization(h)(activated_img)
+                        activated_img = CenterCrop((h,w))(activated_img)
+                    else:
+                        activated_img = self.preprocess_without_normalization(w)(activated_img)
+                        activated_img = CenterCrop((h,w))(activated_img)
+                    '''
+                    # save activated image to see if painting is correct
+                    rand = str(random.uniform(0,1))
+                    activated_img_save = np.uint8(activated_img.numpy()*255).transpose(1,2,0)
+                    savefile = Image.fromarray(activated_img_save)
+                    savefile.save(f"/home/danshili/softTeacher/SoftTeacher/stats/{rand}.jpg")
+                    '''
+                    activation_map.append(activated_img)
             # step2: For each valid activation maps, compute the activated images and put into pipeline
-            activation_map = [torch.Tensor(show_cam_on_image(self.preprocess_without_normalization(224)(img).permute(1,2,0).numpy(),activation, mode="product"))
+            
+                
+            activation_map = [torch.Tensor(activation)
                             for activation in activation_map]
-            img_activated.append(activation_map)
-        raise ValueError(img_activated)
-        results["img_activated"] = torch.Tensor(img_activated)
+            activation_maps.append(activation_map)
+        results["activation_maps"] = activation_maps
         return results
+
+    def foward_unsup_train(self, teacher_data, student_data):
+        # sort the teacher and student input to avoid some bugs
+        tnames = [meta["filename"] for meta in teacher_data["img_metas"]]
+        snames = [meta["filename"] for meta in student_data["img_metas"]]
+        tidx = [tnames.index(name) for name in snames]
+
+        with torch.no_grad():
+            teacher_info = self.extract_teacher_info(
+                teacher_data["img"][
+                    torch.Tensor(tidx).to(teacher_data["img"].device).long()
+                ],
+                [teacher_data["img_metas"][idx] for idx in tidx],
+                [teacher_data["proposals"][idx] for idx in tidx]
+                if ("proposals" in teacher_data)
+                and (teacher_data["proposals"] is not None)
+                else None,
+                [teacher_data["activation_maps"][idx] for idx in tidx],
+            )
+        student_info = self.extract_student_info(**student_data)
+
+        return self.compute_pseudo_label_loss(student_info, teacher_info)
+
+    def extract_teacher_info(self, img, img_metas, proposals=None, img_activated=None, **kwargs):
+        teacher_info = {}
+        feat = self.teacher.extract_feat(img)
+        teacher_info["backbone_feature"] = feat
+        if proposals is None:
+            proposal_cfg = self.teacher.train_cfg.get(
+                "rpn_proposal", self.teacher.test_cfg.rpn
+            )
+            rpn_out = list(self.teacher.rpn_head(feat))
+            proposal_list = self.teacher.rpn_head.get_bboxes(
+                *rpn_out, img_metas=img_metas, cfg=proposal_cfg
+            )
+        else:
+            proposal_list = proposals
+        teacher_info["proposals"] = proposal_list
+
+        proposal_list, proposal_label_list = self.teacher.roi_head.simple_test_bboxes(
+            feat, img_metas, proposal_list, self.teacher.test_cfg.rcnn, rescale=False
+        )
+
+        proposal_list = [p.to(feat[0].device) for p in proposal_list]
+        proposal_list = [
+            p if p.shape[0] > 0 else p.new_zeros(0, 5) for p in proposal_list
+        ]
+        proposal_label_list = [p.to(feat[0].device) for p in proposal_label_list]
+        # filter invalid box roughly
+        if isinstance(self.train_cfg.pseudo_label_initial_score_thr, float):
+            thr = self.train_cfg.pseudo_label_initial_score_thr
+        else:
+            # TODO: use dynamic threshold
+            raise NotImplementedError("Dynamic Threshold is not implemented yet.")
+        proposal_list, proposal_label_list, _ = list(
+            zip(
+                *[
+                    filter_invalid(
+                        proposal,
+                        proposal_label,
+                        proposal[:, -1],
+                        thr=thr,
+                        min_size=self.train_cfg.min_pseduo_box_size,
+                    )
+                    for proposal, proposal_label in zip(
+                        proposal_list, proposal_label_list
+                    )
+                ]
+            )
+        )
+        det_bboxes = proposal_list
+        reg_unc = self.compute_uncertainty_with_aug(
+            feat, img_metas, proposal_list, proposal_label_list
+        )
+        det_bboxes = [
+            torch.cat([bbox, unc], dim=-1) for bbox, unc in zip(det_bboxes, reg_unc)
+        ]
+        det_labels = proposal_label_list
+        teacher_info["det_bboxes"] = det_bboxes
+        teacher_info["det_labels"] = det_labels
+        teacher_info["transform_matrix"] = [
+            torch.from_numpy(meta["transform_matrix"]).float().to(feat[0][0].device)
+            for meta in img_metas
+        ]
+        teacher_info["img_metas"] = img_metas
+        return teacher_info
 
     def reshape_with_padding(self,img):
         def add_margin(pil_img, top, right, bottom, left, color):
@@ -145,11 +267,11 @@ class SoftTeacherGradCAM(SoftTeacher):
         if h > w:
             padding_left = (h - w) // 2
             padding_right = (h - w) - padding_left
-            img_padded = add_margin(img,0,padding_right,0,padding_left,(0,0,0))
+            img_padded = add_margin(img,0,padding_right,0,padding_left,0)
         else:
             padding_up = (- h + w) // 2
             padding_down = (- h + w) - padding_up
-            img_padded = add_margin(img, padding_up,0,padding_down,0,(0,0,0))
+            img_padded = add_margin(img, padding_up,0,padding_down,0,0)
         img_resized = img_padded.resize((224,224),resample=Image.BICUBIC)
 
         return img_resized

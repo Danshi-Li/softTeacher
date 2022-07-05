@@ -124,7 +124,7 @@ class SoftTeacherGradCAM(SoftTeacher):
         img_activated = [show_cam_on_image(self.clip['preprocess'](img).permute(1,2,0).numpy(),activation, mode="product")
                         for activation in activation_map]
         results["img_activated"] = img_activated
-        print(img_activated)
+        raise ValueError(results["img_activated"])
         return results
 
     def reshape_with_padding(self,img):

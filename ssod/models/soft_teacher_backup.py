@@ -23,7 +23,8 @@ class SoftTeacher(MultiSteamDetector):
             self.unsup_weight = self.train_cfg.unsup_weight
 
     def forward_train(self, img, img_metas, **kwargs):
-        super().forward_train(img, img_metas, **kwargs)
+        return super().forward_train(img, img_metas, **kwargs)
+        '''
         kwargs.update({"img": img})
         kwargs.update({"img_metas": img_metas})
         kwargs.update({"tag": [meta["tag"] for meta in img_metas]})
@@ -55,6 +56,7 @@ class SoftTeacher(MultiSteamDetector):
             loss.update(**unsup_loss)
 
         return loss
+        '''
 
     def foward_unsup_train(self, teacher_data, student_data):
         # sort the teacher and student input to avoid some bugs
