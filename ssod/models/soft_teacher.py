@@ -187,7 +187,7 @@ class SoftTeacherGradCAM(SoftTeacher):
                 if ("proposals" in teacher_data)
                 and (teacher_data["proposals"] is not None)
                 else None,
-                [torch.stack(teacher_data["activation_maps"][idx]) for idx in tidx],
+                [torch.stack(teacher_data["activation_maps"][idx]).to(torch.float16).cuda() for idx in tidx],
             )
         student_info = self.extract_student_info(**student_data)
 
@@ -208,6 +208,7 @@ class SoftTeacherGradCAM(SoftTeacher):
                 "rpn_proposal", self.teacher.test_cfg.rpn
             )
             rpn_out = list(self.teacher.rpn_head(feat))
+            '''
             proposal_list = self.teacher.rpn_head.get_bboxes(
                 *rpn_out, img_metas=img_metas, cfg=proposal_cfg
             )
@@ -215,7 +216,7 @@ class SoftTeacherGradCAM(SoftTeacher):
             proposal_list = self.teacher.rpn_head.get_bboxes(
                 *rpn_out, activated_features=rpn_activated_out, img_metas=img_metas, cfg=proposal_cfg
             )
-            '''
+            
             print(rpn_activated_out)
         else:
             proposal_list = proposals

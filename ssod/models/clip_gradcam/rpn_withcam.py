@@ -160,8 +160,13 @@ class RPNHeadWithCAM(RPNHead):
                 score_factor_list = select_single_mlvl(score_factors, img_id)
             else:
                 score_factor_list = [None for _ in range(num_levels)]
-            activated_cls_score_lists = [select_single_mlvl(activation[0], img_id) for activation in activated_features]
-            activated_bbox_pred_lists = [select_single_mlvl(activation[1], img_id) for activation in activated_features]
+            if activated_features is not None:
+                activated_cls_score_lists = [select_single_mlvl(activation[0], img_id) for activation in activated_features]
+                activated_bbox_pred_lists = [select_single_mlvl(activation[1], img_id) for activation in activated_features]
+            else:
+                activated_cls_score_lists = None
+                activated_bbox_pred_lists = None
+            
 
             results = self._get_bboxes_single(cls_score_list, bbox_pred_list,
                                               score_factor_list, mlvl_priors,
@@ -224,7 +229,6 @@ class RPNHeadWithCAM(RPNHead):
         # here in order to incorporate the proposals extracted from activated images, it should be doe that the
         # nms_pre parameter be modified. For the time being, we just have it fixed. Additionally, since each activated image
         # is assumed to focus on a single class only, #proposals preserved from those should be expected to be smaller.
-        nms_pre_activated = nms_pre // len(activated_cls_score_lists)
 
         for level_idx in range(len(cls_score_list)):
             rpn_cls_score = cls_score_list[level_idx]
@@ -261,41 +265,44 @@ class RPNHeadWithCAM(RPNHead):
                                 level_idx,
                                 dtype=torch.long))
         # integrate proposals generated from activated images.
-        for activated_img_idx in range(len(activated_cls_score_lists)):
-            for level_idx in range(len(activated_img_idx)):
-                rpn_cls_score = activated_cls_score_lists[activated_img_idx][level_idx]
-                rpn_bbox_pred = activated_bbox_pred_lists[activated_img_idx][level_idx]
-                assert rpn_cls_score.size()[-2:] == rpn_bbox_pred.size()[-2:]
-                rpn_cls_score = rpn_cls_score.permute(1, 2, 0)
-                if self.use_sigmoid_cls:
-                    rpn_cls_score = rpn_cls_score.reshape(-1)
-                    scores = rpn_cls_score.sigmoid()
-                else:
-                    rpn_cls_score = rpn_cls_score.reshape(-1, 2)
-                    # We set FG labels to [0, num_class-1] and BG label to
-                    # num_class in RPN head since mmdet v2.5, which is unified to
-                    # be consistent with other head since mmdet v2.0. In mmdet v2.0
-                    # to v2.4 we keep BG label as 0 and FG label as 1 in rpn head.
-                    scores = rpn_cls_score.softmax(dim=1)[:, 0]
-                rpn_bbox_pred = rpn_bbox_pred.permute(1, 2, 0).reshape(-1, 4)
+        if activated_cls_score_lists is not None:
+            nms_pre_activated = nms_pre // len(activated_cls_score_lists)
 
-                anchors = mlvl_anchors[level_idx]
-                if 0 < nms_pre < scores.shape[0]:
-                    # sort is faster than topk
-                    # _, topk_inds = scores.topk(cfg.nms_pre)
-                    ranked_scores, rank_inds = scores.sort(descending=True)
-                    topk_inds = rank_inds[:nms_pre_activated]
-                    scores = ranked_scores[:nms_pre_activated]
-                    rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
-                    anchors = anchors[topk_inds, :]
+            for activated_img_idx in range(len(activated_cls_score_lists)):
+                for level_idx in range(len(activated_cls_score_lists[activated_img_idx])):
+                    rpn_cls_score = activated_cls_score_lists[activated_img_idx][level_idx]
+                    rpn_bbox_pred = activated_bbox_pred_lists[activated_img_idx][level_idx]
+                    assert rpn_cls_score.size()[-2:] == rpn_bbox_pred.size()[-2:]
+                    rpn_cls_score = rpn_cls_score.permute(1, 2, 0)
+                    if self.use_sigmoid_cls:
+                        rpn_cls_score = rpn_cls_score.reshape(-1)
+                        scores = rpn_cls_score.sigmoid()
+                    else:
+                        rpn_cls_score = rpn_cls_score.reshape(-1, 2)
+                        # We set FG labels to [0, num_class-1] and BG label to
+                        # num_class in RPN head since mmdet v2.5, which is unified to
+                        # be consistent with other head since mmdet v2.0. In mmdet v2.0
+                        # to v2.4 we keep BG label as 0 and FG label as 1 in rpn head.
+                        scores = rpn_cls_score.softmax(dim=1)[:, 0]
+                    rpn_bbox_pred = rpn_bbox_pred.permute(1, 2, 0).reshape(-1, 4)
 
-                mlvl_scores.append(scores)
-                mlvl_bbox_preds.append(rpn_bbox_pred)
-                mlvl_valid_anchors.append(anchors)
-                level_ids.append(
-                    scores.new_full((scores.size(0), ),
-                                    level_idx,
-                                    dtype=torch.long))
+                    anchors = mlvl_anchors[level_idx]
+                    if 0 < nms_pre < scores.shape[0]:
+                        # sort is faster than topk
+                        # _, topk_inds = scores.topk(cfg.nms_pre)
+                        ranked_scores, rank_inds = scores.sort(descending=True)
+                        topk_inds = rank_inds[:nms_pre_activated]
+                        scores = ranked_scores[:nms_pre_activated]
+                        rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
+                        anchors = anchors[topk_inds, :]
+
+                    mlvl_scores.append(scores)
+                    mlvl_bbox_preds.append(rpn_bbox_pred)
+                    mlvl_valid_anchors.append(anchors)
+                    level_ids.append(
+                        scores.new_full((scores.size(0), ),
+                                        level_idx,
+                                        dtype=torch.long))
 
         return self._bbox_post_process(mlvl_scores, mlvl_bbox_preds,
                                        mlvl_valid_anchors, level_ids, cfg,
