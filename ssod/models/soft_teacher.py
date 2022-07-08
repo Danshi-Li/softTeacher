@@ -10,7 +10,7 @@ from ssod.utils import log_image_with_boxes, log_every_n
 
 from .multi_stream_detector import MultiSteamDetector
 from .utils import Transform2D, filter_invalid
-from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor
+from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
 
 import mmcv
 import cv2
@@ -147,10 +147,12 @@ class SoftTeacherGradCAM(SoftTeacher):
                     h = int(img.shape[1])
                     w = int(img.shape[2])
                     if h > w:
-                        activated_img = self.preprocess_without_normalization(h)(activated_img)
+                        activated_img = self.preprocess_without_normalization(h)(activated_img) * 255
+                        activated_img = Normalize(mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0])(activated_img)
                         activated_img = CenterCrop((h,w))(activated_img)
                     else:
-                        activated_img = self.preprocess_without_normalization(w)(activated_img)
+                        activated_img = self.preprocess_without_normalization(w)(activated_img) * 255
+                        activated_img = Normalize(mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0])(activated_img)
                         activated_img = CenterCrop((h,w))(activated_img)
                     '''
                     # save activated image to see if painting is correct
@@ -185,7 +187,7 @@ class SoftTeacherGradCAM(SoftTeacher):
                 if ("proposals" in teacher_data)
                 and (teacher_data["proposals"] is not None)
                 else None,
-                [teacher_data["activation_maps"][idx] for idx in tidx],
+                [torch.stack(teacher_data["activation_maps"][idx]) for idx in tidx],
             )
         student_info = self.extract_student_info(**student_data)
 
@@ -193,8 +195,14 @@ class SoftTeacherGradCAM(SoftTeacher):
 
     def extract_teacher_info(self, img, img_metas, proposals=None, img_activated=None, **kwargs):
         teacher_info = {}
+        # there is features from original image
         feat = self.teacher.extract_feat(img)
         teacher_info["backbone_feature"] = feat
+        # load also features attained from activated images
+        feat_activated = [self.teacher.extract_feat(img) for img in img_activated]
+        rpn_activated_out = [list(self.teacher.rpn_head(feat)) for feat in feat_activated]
+        teacher_info['activated_feature'] = feat_activated
+
         if proposals is None:
             proposal_cfg = self.teacher.train_cfg.get(
                 "rpn_proposal", self.teacher.test_cfg.rpn
@@ -203,6 +211,12 @@ class SoftTeacherGradCAM(SoftTeacher):
             proposal_list = self.teacher.rpn_head.get_bboxes(
                 *rpn_out, img_metas=img_metas, cfg=proposal_cfg
             )
+            '''
+            proposal_list = self.teacher.rpn_head.get_bboxes(
+                *rpn_out, activated_features=rpn_activated_out, img_metas=img_metas, cfg=proposal_cfg
+            )
+            '''
+            print(rpn_activated_out)
         else:
             proposal_list = proposals
         teacher_info["proposals"] = proposal_list
@@ -279,7 +293,6 @@ class SoftTeacherGradCAM(SoftTeacher):
     def preprocess_without_normalization(self,n_px):
         return Compose([
             Resize((n_px,n_px), interpolation=BICUBIC),
-            #CenterCrop(n_px),
             self._convert_image_to_rgb,
             ToTensor(),
         ])
