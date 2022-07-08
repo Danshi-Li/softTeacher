@@ -1,6 +1,6 @@
 mmdet_base = "../../thirdparty/mmdetection/configs/_base_"
 _base_ = [
-    f"{mmdet_base}/models/faster_rcnn_r50_fpn.py",
+    f"faster_rcnn_r50_rpn_gradcam.py",
     f"{mmdet_base}/datasets/coco_detection.py",
     f"{mmdet_base}/schedules/schedule_1x.py",
     f"{mmdet_base}/default_runtime.py",
