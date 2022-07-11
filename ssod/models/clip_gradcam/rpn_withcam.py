@@ -156,13 +156,14 @@ class RPNHeadWithCAM(RPNHead):
             img_meta = img_metas[img_id]
             cls_score_list = select_single_mlvl(cls_scores, img_id)
             bbox_pred_list = select_single_mlvl(bbox_preds, img_id)
+
             if with_score_factors:
                 score_factor_list = select_single_mlvl(score_factors, img_id)
             else:
                 score_factor_list = [None for _ in range(num_levels)]
             if activated_features is not None:
-                activated_cls_score_lists = [select_single_mlvl(activation[0], img_id) for activation in activated_features]
-                activated_bbox_pred_lists = [select_single_mlvl(activation[1], img_id) for activation in activated_features]
+                activated_cls_score_lists = self.select_single_mlvl_activated(activated_features[img_id][0])
+                activated_bbox_pred_lists = self.select_single_mlvl_activated(activated_features[img_id][1])
             else:
                 activated_cls_score_lists = None
                 activated_bbox_pred_lists = None
@@ -266,12 +267,12 @@ class RPNHeadWithCAM(RPNHead):
                                 dtype=torch.long))
         # integrate proposals generated from activated images.
         if activated_cls_score_lists is not None:
-            nms_pre_activated = nms_pre // len(activated_cls_score_lists)
+            nms_pre_activated = nms_pre // 10
 
-            for activated_img_idx in range(len(activated_cls_score_lists)):
-                for level_idx in range(len(activated_cls_score_lists[activated_img_idx])):
-                    rpn_cls_score = activated_cls_score_lists[activated_img_idx][level_idx]
-                    rpn_bbox_pred = activated_bbox_pred_lists[activated_img_idx][level_idx]
+            for level_idx in range(len(activated_cls_score_lists)):
+                for activated_img_idx in range(len(activated_cls_score_lists[level_idx])):
+                    rpn_cls_score = activated_cls_score_lists[level_idx][activated_img_idx]
+                    rpn_bbox_pred = activated_bbox_pred_lists[level_idx][activated_img_idx]
                     assert rpn_cls_score.size()[-2:] == rpn_bbox_pred.size()[-2:]
                     rpn_cls_score = rpn_cls_score.permute(1, 2, 0)
                     if self.use_sigmoid_cls:
@@ -333,11 +334,13 @@ class RPNHeadWithCAM(RPNHead):
                 are bounding box positions (tl_x, tl_y, br_x, br_y) and the
                 5-th column is a score between 0 and 1.
         """
-        scores = torch.cat(mlvl_scores)
-        anchors = torch.cat(mlvl_valid_anchors)
-        rpn_bbox_pred = torch.cat(mlvl_bboxes)
+        # TODO: the tensors seems torch.float32 for some and torch.float16 for others.
+        #       should root the problem from codes prior to this point.
+        scores = torch.cat(mlvl_scores).float()
+        anchors = torch.cat(mlvl_valid_anchors).float()
+        rpn_bbox_pred = torch.cat(mlvl_bboxes).float()
         proposals = self.bbox_coder.decode(
-            anchors, rpn_bbox_pred, max_shape=img_shape)
+            anchors, rpn_bbox_pred, max_shape=img_shape).float()
         ids = torch.cat(level_ids)
 
         if cfg.min_bbox_size >= 0:
@@ -385,3 +388,17 @@ class RPNHeadWithCAM(RPNHead):
                                          score_threshold, nms_pre,
                                          cfg.max_per_img)
         return dets
+
+    def select_single_mlvl_activated(self,mlvl_tensors, detach=True):
+        assert isinstance(mlvl_tensors, (list, tuple))
+        num_levels = len(mlvl_tensors)
+
+        if detach:
+            mlvl_tensor_list = [
+                mlvl_tensors[i][:].detach() for i in range(num_levels)
+            ]
+        else:
+            mlvl_tensor_list = [
+                mlvl_tensors[i][:] for i in range(num_levels)
+            ]
+        return mlvl_tensor_list

@@ -111,7 +111,7 @@ class SoftTeacherGradCAM(SoftTeacher):
         return loss
 
     def load_gradcam_activated_img(self, results):
-        
+        self.clip['model'].cuda().eval()
         images = results['img']
         activation_maps = []
         for img in images:
@@ -131,14 +131,14 @@ class SoftTeacherGradCAM(SoftTeacher):
             score, _ = self.clip['model'](image_input,self.clip['texts'])
             score_softmax = torch.softmax(score[0],0,score.dtype)
             y=torch.Tensor(range(score_softmax.shape[0]))
-            all_cls = y[score_softmax>0.01].tolist()
+            all_cls = y[score_softmax>0.05].int().tolist()
 
             cam_input_tensor = (image_input,self.clip['texts'])
             activation_map = []
             for cls in all_cls:
                 targets = [ClassifierOutputTarget(int(cls)),]
                 grayscale_cam = self.cam(input_tensor=cam_input_tensor, targets=targets)
-                if np.max(grayscale_cam) > 0.99:    # if activation map is not all-zero
+                if (np.max(grayscale_cam) > 0.99) or ((cls == all_cls[-1]) and (len(activation_map) == 0)):    # if activation map is not all-zero
                     # TODO: for each activation map, resize it back to match the shape of original images.
                     #       It would do to centercrop off the padding and then interpolate to original shape.
                     #       Also, should visualize to check it indeed matches the original image. (Watch out for Augmentations!)
@@ -163,12 +163,11 @@ class SoftTeacherGradCAM(SoftTeacher):
                     '''
                     activation_map.append(activated_img)
             # step2: For each valid activation maps, compute the activated images and put into pipeline
-            
-                
             activation_map = [torch.Tensor(activation)
                             for activation in activation_map]
-            activation_maps.append(activation_map)
+            activation_maps.append(torch.stack(activation_map))
         results["activation_maps"] = activation_maps
+        self.clip['model'].cpu()
         return results
 
     def foward_unsup_train(self, teacher_data, student_data):
@@ -176,6 +175,7 @@ class SoftTeacherGradCAM(SoftTeacher):
         tnames = [meta["filename"] for meta in teacher_data["img_metas"]]
         snames = [meta["filename"] for meta in student_data["img_metas"]]
         tidx = [tnames.index(name) for name in snames]
+
 
         with torch.no_grad():
             teacher_info = self.extract_teacher_info(
@@ -187,7 +187,7 @@ class SoftTeacherGradCAM(SoftTeacher):
                 if ("proposals" in teacher_data)
                 and (teacher_data["proposals"] is not None)
                 else None,
-                [torch.stack(teacher_data["activation_maps"][idx]).to(torch.float16).cuda() for idx in tidx],
+                [teacher_data["activation_maps"][idx].to(teacher_data["img"].device) for idx in tidx],
             )
         student_info = self.extract_student_info(**student_data)
 
@@ -198,11 +198,12 @@ class SoftTeacherGradCAM(SoftTeacher):
         # there is features from original image
         feat = self.teacher.extract_feat(img)
         teacher_info["backbone_feature"] = feat
-        # load also features attained from activated images
+        # load also features attained from activated
+        
         feat_activated = [self.teacher.extract_feat(img) for img in img_activated]
         rpn_activated_out = [list(self.teacher.rpn_head(feat)) for feat in feat_activated]
-        teacher_info['activated_feature'] = feat_activated
-
+        #teacher_info['activated_feature'] = feat_activated
+        
         if proposals is None:
             proposal_cfg = self.teacher.train_cfg.get(
                 "rpn_proposal", self.teacher.test_cfg.rpn
@@ -217,7 +218,6 @@ class SoftTeacherGradCAM(SoftTeacher):
                 *rpn_out, activated_features=rpn_activated_out, img_metas=img_metas, cfg=proposal_cfg
             )
             
-            print(rpn_activated_out)
         else:
             proposal_list = proposals
         teacher_info["proposals"] = proposal_list

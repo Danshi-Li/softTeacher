@@ -8,7 +8,7 @@ GPUS=$4
 FROM=$5
 PORT=${PORT:-29490}
 
-export CUDA_VISIBLE_DEVICES=0,2
+export CUDA_VISIBLE_DEVICES=0,2,4,5
 PYTHONPAT=H"$(dirname $0)/..":$PYTHONPATH
 
 if [[ ${TYPE} == 'baseline' ]]; then
