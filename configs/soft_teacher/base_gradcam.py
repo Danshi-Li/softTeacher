@@ -133,7 +133,7 @@ strong_pipeline = [
     dict(
         type="Collect",
         # keys=["img", "gt_bboxes", "gt_labels", "captions"],
-        keys=["img", "gt_bboxes", "gt_labels"],
+        keys=["img", "gt_bboxes", "gt_labels",],
         meta_keys=(
             "filename",
             "ori_shape",
@@ -149,13 +149,14 @@ strong_pipeline = [
 weak_pipeline = [
     dict(
         type="Sequential",
-        transforms=[
+        transforms=[  
             dict(
                 type="RandResize",
                 img_scale=[(1333, 400), (1333, 1200)],
                 multiscale_mode="range",
                 keep_ratio=True,
             ),
+            
             dict(type="RandFlip", flip_ratio=0.5),
         ],
         record=True,
@@ -177,12 +178,13 @@ weak_pipeline = [
             "scale_factor",
             "tag",
             "transform_matrix",
+            "img_activated"
         ),
     ),
 ]
 unsup_pipeline = [
     dict(type="LoadImageFromFile"),
-    # dict(type="LoadCLIPActivatedImage"),
+    dict(type="LoadCLIPActivatedImage",keep_ratio=0.01),
     dict(type="PseudoSamples", with_bbox=True),
     dict(
         type="MultiBranch", unsup_student=strong_pipeline, unsup_teacher=weak_pipeline

@@ -6,9 +6,9 @@ FOLD=$2
 PERCENT=$3
 GPUS=$4
 FROM=$5
-PORT=${PORT:-29490}
+PORT=${PORT:-29480}
 
-export CUDA_VISIBLE_DEVICES=0,2,4,5
+export CUDA_VISIBLE_DEVICES=2,3
 PYTHONPAT=H"$(dirname $0)/..":$PYTHONPATH
 
 if [[ ${TYPE} == 'baseline' ]]; then

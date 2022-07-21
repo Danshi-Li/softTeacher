@@ -11,7 +11,6 @@ from ssod.utils import log_image_with_boxes, log_every_n
 from .multi_stream_detector import MultiSteamDetector
 from .utils import Transform2D, filter_invalid
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
-import torch.nn.functional as F
 
 import mmcv
 import cv2
@@ -46,6 +45,36 @@ class SoftTeacherGradCAM(SoftTeacher):
             test_cfg=test_cfg,
         )
 
+        self.CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',   #6
+               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',        #11
+               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',      #17
+               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',  #24
+               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',  #30
+               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',       #35
+               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',     #39
+               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',  #46
+               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',    #52
+               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',            #58
+               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',  #64
+               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',         #69
+               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',       #75
+               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush',)     #80
+        self.PROMPTS = ("photo of a [CLS]",)
+
+        self.clip = {}
+        model, preprocess = clip.load("RN50")
+        model.cuda().eval()
+        texts = []
+        for cls in self.CLASSES:
+            texts.append(self.PROMPTS[0].replace("[CLS]",cls))
+        text_tokens = clip.tokenize([desc for desc in texts]).cuda()
+        self.clip['model'] = model
+        self.clip['preprocess'] = preprocess
+        self.clip['texts'] = text_tokens
+
+        target_layers = [model.visual.layer4[0]]
+        self.cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=False)
+
     def forward_train(self, img, img_metas, **kwargs):
         super().forward_train(img, img_metas, **kwargs)
         kwargs.update({"img": img})
@@ -69,6 +98,7 @@ class SoftTeacherGradCAM(SoftTeacher):
             sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
             loss.update(**sup_loss)
         if "unsup_student" in data_groups:
+            data_groups['unsup_teacher'] = self.load_gradcam_activated_img(data_groups['unsup_teacher'])
             unsup_loss = weighted_loss(
                 self.foward_unsup_train(
                     data_groups["unsup_teacher"], data_groups["unsup_student"]
@@ -80,11 +110,73 @@ class SoftTeacherGradCAM(SoftTeacher):
 
         return loss
 
+    def load_gradcam_activated_img(self, results):
+        self.clip['model'].cuda().eval()
+        images = results['img']
+        activation_maps = []
+        for img in images:
+            # deep copy
+            img_intformat = copy.deepcopy(img).permute(1,2,0).cpu().numpy()
+            mean = results['img_metas'][0]['img_norm_cfg']['mean']
+            std = results['img_metas'][0]['img_norm_cfg']['std']
+            img_intformat = img_intformat * std
+            img_intformat = img_intformat + mean
+            img_intformat = Image.fromarray(np.uint8(img_intformat))
+
+            img_intformat = self.reshape_with_padding(img_intformat)
+            image_input = torch.Tensor(np.stack([self.clip['preprocess'](img_intformat)])).cuda()
+
+            # First run: find out all classes with probability >0.01
+            # With all survived classes, calculate activation map
+            score, _ = self.clip['model'](image_input,self.clip['texts'])
+            score_softmax = torch.softmax(score[0],0,score.dtype)
+            y=torch.Tensor(range(score_softmax.shape[0]))
+            all_cls = y[score_softmax>0.05].int().tolist()
+
+            cam_input_tensor = (image_input,self.clip['texts'])
+            activation_map = []
+            for cls in all_cls:
+                targets = [ClassifierOutputTarget(int(cls)),]
+                grayscale_cam = self.cam(input_tensor=cam_input_tensor, targets=targets)
+                if (np.max(grayscale_cam) > 0.99) or ((cls == all_cls[-1]) and (len(activation_map) == 0)):    # if activation map is not all-zero
+                    # TODO: for each activation map, resize it back to match the shape of original images.
+                    #       It would do to centercrop off the padding and then interpolate to original shape.
+                    #       Also, should visualize to check it indeed matches the original image. (Watch out for Augmentations!)
+                    activated_img = show_cam_on_image(self.preprocess_without_normalization(224)(img_intformat).permute(1,2,0).numpy(),grayscale_cam, mode="product").transpose(2,0,1)
+                    activated_img = Image.fromarray(activated_img.transpose(1,2,0))
+                    h = int(img.shape[1])
+                    w = int(img.shape[2])
+                    if h > w:
+                        activated_img = self.preprocess_without_normalization(h)(activated_img) * 255
+                        activated_img = Normalize(mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0])(activated_img)
+                        activated_img = CenterCrop((h,w))(activated_img)
+                    else:
+                        activated_img = self.preprocess_without_normalization(w)(activated_img) * 255
+                        activated_img = Normalize(mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0])(activated_img)
+                        activated_img = CenterCrop((h,w))(activated_img)
+                    '''
+                    # save activated image to see if painting is correct
+                    rand = str(random.uniform(0,1))
+                    activated_img_save = np.uint8(activated_img.numpy()*255).transpose(1,2,0)
+                    savefile = Image.fromarray(activated_img_save)
+                    savefile.save(f"/home/danshili/softTeacher/SoftTeacher/stats/{rand}.jpg")
+                    '''
+                    activation_map.append(activated_img)
+            # step2: For each valid activation maps, compute the activated images and put into pipeline
+            activation_map = [torch.Tensor(activation)
+                            for activation in activation_map]
+            activation_maps.append(torch.stack(activation_map))
+        results["activation_maps"] = activation_maps
+        self.clip['model'].cpu()
+        return results
+
     def foward_unsup_train(self, teacher_data, student_data):
         # sort the teacher and student input to avoid some bugs
         tnames = [meta["filename"] for meta in teacher_data["img_metas"]]
         snames = [meta["filename"] for meta in student_data["img_metas"]]
         tidx = [tnames.index(name) for name in snames]
+
+
         with torch.no_grad():
             teacher_info = self.extract_teacher_info(
                 teacher_data["img"][
@@ -95,50 +187,21 @@ class SoftTeacherGradCAM(SoftTeacher):
                 if ("proposals" in teacher_data)
                 and (teacher_data["proposals"] is not None)
                 else None,
-                [np.stack(teacher_data["img_metas"][idx]["img_activated"]).transpose(0,3,1,2) for idx in tidx]
-                if ("img_activated" in teacher_data["img_metas"][0])
-                else None
+                [teacher_data["activation_maps"][idx].to(teacher_data["img"].device) for idx in tidx],
             )
         student_info = self.extract_student_info(**student_data)
 
         return self.compute_pseudo_label_loss(student_info, teacher_info)
 
     def extract_teacher_info(self, img, img_metas, proposals=None, img_activated=None, **kwargs):
-        # pad activated image to the size of image, exactly what was done in the collate() function for original images
-        if img_activated is not None:
-            img_activated_padded = []
-            for idx in range(len(img_activated)):
-                inner = []
-                for instance_idx in range(len(img_activated[idx])):
-                    pad = [0 for _ in range(4)]
-                    for dim in range(1,2+1):
-                        # 'batch_input_shape'=(H,W); img_activated=(3,H,W), do not pad the first dim
-                        pad[2*dim-1] = img_metas[0]['batch_input_shape'][-dim] - img_activated[idx][instance_idx].shape[-dim]
-                    padded_img = F.pad(torch.Tensor(img_activated[idx][instance_idx]), pad, value=0)
-                    padded_img = Normalize(mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0])(padded_img)
-                    inner.append(padded_img)
-                img_activated_padded.append(torch.stack(inner).to(img.device))
-            img_activated = img_activated_padded
-        '''
-        print("img")
-        print(img.shape)
-        print("img_activated")
-        t = [img_activated[i].shape for i in range(len(img_activated))]
-        print(t)
-        '''
-
-
         teacher_info = {}
         # there is features from original image
         feat = self.teacher.extract_feat(img)
         teacher_info["backbone_feature"] = feat
         # load also features attained from activated
-        if img_activated is not None:
-            feat_activated = [self.teacher.extract_feat(img) for img in img_activated]
-            rpn_activated_out = [list(self.teacher.rpn_head(feat)) for feat in feat_activated]
-        else:
-            feat_activated = None
-            rpn_activated_out = None
+        
+        feat_activated = [self.teacher.extract_feat(img) for img in img_activated]
+        rpn_activated_out = [list(self.teacher.rpn_head(feat)) for feat in feat_activated]
         #teacher_info['activated_feature'] = feat_activated
         
         if proposals is None:

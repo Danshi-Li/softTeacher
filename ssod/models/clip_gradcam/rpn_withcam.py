@@ -257,7 +257,6 @@ class RPNHeadWithCAM(RPNHead):
                 scores = ranked_scores[:nms_pre]
                 rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
                 anchors = anchors[topk_inds, :]
-
             mlvl_scores.append(scores)
             mlvl_bbox_preds.append(rpn_bbox_pred)
             mlvl_valid_anchors.append(anchors)
@@ -268,7 +267,6 @@ class RPNHeadWithCAM(RPNHead):
         # integrate proposals generated from activated images.
         if activated_cls_score_lists is not None:
             nms_pre_activated = nms_pre // 10
-
             for level_idx in range(len(activated_cls_score_lists)):
                 for activated_img_idx in range(len(activated_cls_score_lists[level_idx])):
                     rpn_cls_score = activated_cls_score_lists[level_idx][activated_img_idx]
@@ -288,7 +286,7 @@ class RPNHeadWithCAM(RPNHead):
                     rpn_bbox_pred = rpn_bbox_pred.permute(1, 2, 0).reshape(-1, 4)
 
                     anchors = mlvl_anchors[level_idx]
-                    if 0 < nms_pre < scores.shape[0]:
+                    if 0 < nms_pre_activated < scores.shape[0]:
                         # sort is faster than topk
                         # _, topk_inds = scores.topk(cfg.nms_pre)
                         ranked_scores, rank_inds = scores.sort(descending=True)
@@ -296,7 +294,6 @@ class RPNHeadWithCAM(RPNHead):
                         scores = ranked_scores[:nms_pre_activated]
                         rpn_bbox_pred = rpn_bbox_pred[topk_inds, :]
                         anchors = anchors[topk_inds, :]
-
                     mlvl_scores.append(scores)
                     mlvl_bbox_preds.append(rpn_bbox_pred)
                     mlvl_valid_anchors.append(anchors)
@@ -339,6 +336,7 @@ class RPNHeadWithCAM(RPNHead):
         scores = torch.cat(mlvl_scores).float()
         anchors = torch.cat(mlvl_valid_anchors).float()
         rpn_bbox_pred = torch.cat(mlvl_bboxes).float()
+        
         proposals = self.bbox_coder.decode(
             anchors, rpn_bbox_pred, max_shape=img_shape).float()
         ids = torch.cat(level_ids)

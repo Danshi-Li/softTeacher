@@ -54,6 +54,8 @@ def show_cam_on_image(img: np.ndarray,
         cam = activation * activation * img * (1 - keep_ratio) + img * keep_ratio
     elif mode == "original":
         cam = img
+    elif mode == "heatonly":
+        cam = heatmap
     cam = cam / np.max(cam)
     return np.uint8(255 * cam)
 

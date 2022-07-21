@@ -15,6 +15,9 @@ from PIL import Image
 from pytorch_grad_cam import GradCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
+import os
+import cv2
+import pickle
 
 
 try:
@@ -28,42 +31,28 @@ class LoadCLIPActivatedImage:
     '''
     specification to be determined
     '''
-    def __init__(self):
-        '''
-        specification to be determined
-        '''
-        #TODO: these config settings should support reading from config file
-        self.CLASSES = ('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',   #6
-               'train', 'truck', 'boat', 'traffic light', 'fire hydrant',        #11
-               'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog',      #17
-               'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe',  #24
-               'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',  #30
-               'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat',       #35
-               'baseball glove', 'skateboard', 'surfboard', 'tennis racket',     #39
-               'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl',  #46
-               'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',    #52
-               'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',            #58
-               'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',  #64
-               'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',         #69
-               'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',       #75
-               'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush',)     #80
-        self.PROMPTS = ("photo of a [CLS]",)
+    def __init__(self,keep_ratio=0.01):
+        self.keep_ratio = keep_ratio
+        self.SAVE_DIR = '/home/danshili/softTeacher/SoftTeacher/data/gradcam-numpy/'
 
-        self.clip = {}
-        model, preprocess = clip.load("RN50")
-        model.cuda().eval()
-        texts = []
-        for cls in self.CLASSES:
-            texts.append(self.PROMPTS[0].replace("[CLS]",cls))
-        text_tokens = clip.tokenize([desc for desc in texts])
-        self.clip['model'] = model
-        self.clip['preprocess'] = preprocess
-        self.clip['texts'] = text_tokens
-
-        target_layers = [model.visual.layer4[0]]
-        self.cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=False)
-        print("LoadCLIPActivatedImage init successful")
-
+    def find_grayscale(self,map,rgb):
+        bgr = (rgb[2],rgb[1],rgb[0])
+        if bgr in map.keys():
+            return map[bgr]
+        else:
+            # search the nearest neighbor
+            bgr = (int(bgr[0]),int(bgr[1]),int(bgr[2]))
+            k = 256*256*256
+            v = 0
+            thr = 4/256/256
+            for key,value in map.items():
+                diff =np.abs((int(key[0])-bgr[0]) + (int(key[1])-bgr[1])/256 + (int(key[2])-bgr[2])/256/256)
+                if diff < thr:
+                    return value
+                if diff < k:
+                    k = diff
+                    v = value
+            return v
 
     def __call__(self,results):
         '''
@@ -76,49 +65,24 @@ class LoadCLIPActivatedImage:
         """
         '''
         
-        # Step1: acquire activation maps w.r.t. every classes of interest
-        #        (meanwhile deleting activation maps that are too small in magnitude)
-        #        The final output is indeterministic in its numbers
-        img = self.reshape_with_padding(results['img'])
-        img = img.transpose(2,0,1)
-        image_input = torch.Tensor(np.stack([img]))
-        cam_input_tensor = (image_input.cuda(),self.clip['texts'].cuda())
+        img_activated = []
+        image_number = results['filename'].split('.')[0].split('/')[-1]
+        original_img = results['img']
 
-        activation_map = []
-        for cls in range(len(self.CLASSES)):
-            targets = [ClassifierOutputTarget(cls),]
-            grayscale_cam = self.cam(input_tensor=cam_input_tensor, targets=targets)
-            if np.max(grayscale_cam) > 0:    # if activation map output is greater than a threshold magnitude
-                activation_map.append(grayscale_cam)
 
-        # step2: For each valid activation maps, compute the activated images and put into pipeline
-        img_activated = [show_cam_on_image(self.clip['preprocess'](img).permute(1,2,0).numpy(),activation, mode="product")
-                        for activation in activation_map]
-        results["img_activated"] = img_activated
+        #TODO: find all activated images corresponding to given image
+        for filename in os.listdir(self.SAVE_DIR):
+            if image_number in filename:
+                #activation = np.load(self.SAVE_DIR+filename)[np.newaxis,:,:].transpose((1,2,0))
+                activation = np.load(self.SAVE_DIR+filename).transpose((1,2,0))
+                activated_img = activation * activation * original_img * (1 - self.keep_ratio) + original_img * self.keep_ratio
+                activated_img = activated_img / np.max(activated_img)
+                activated_img = np.uint8(255 * activated_img)
+                img_activated.append(activated_img)
+                assert activated_img.shape == original_img.shape
+
+        try:
+            results["img_activated"] = np.stack(img_activated)
+        except:
+            raise ValueError(f"UNEXPECTED: image loaded no activation for image number {image_number}")
         return results
-
-    def reshape_with_padding(self,img):
-        def add_margin(pil_img, top, right, bottom, left, color):
-            width, height = pil_img.size
-            new_width = width + right + left
-            new_height = height + top + bottom
-            result = Image.new(pil_img.mode, (new_width, new_height), color)
-            result.paste(pil_img, (left, top))
-            return result
-
-        img = Image.fromarray(img)
-        h, w = img.size[1], img.size[0]
-        if h > w:
-            padding_left = (h - w) // 2
-            padding_right = (h - w) - padding_left
-            img_padded = add_margin(img,0,padding_right,0,padding_left,(0,0,0))
-        else:
-            padding_up = (- h + w) // 2
-            padding_down = (- h + w) - padding_up
-            img_padded = add_margin(img, padding_up,0,padding_down,0,(0,0,0))
-        img_resized = img_padded.resize((224,224),resample=Image.BICUBIC)
-
-        return np.asarray(img_resized)
-
-    def _convert_image_to_rgb(self,image):
-        return image.convert("RGB")
