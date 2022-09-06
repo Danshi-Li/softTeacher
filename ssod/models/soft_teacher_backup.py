@@ -25,6 +25,8 @@ class SoftTeacher(MultiSteamDetector):
     def forward_train(self, img, img_metas, **kwargs):
         return super().forward_train(img, img_metas, **kwargs)
         '''
+        # below are codes for forward_train() in the original SoftTeacher paper. As our SoftTeacherWithCAM class
+        # inherits SoftTeacher and overwrites the below part, they are annotted and discarded.
         kwargs.update({"img": img})
         kwargs.update({"img_metas": img_metas})
         kwargs.update({"tag": [meta["tag"] for meta in img_metas]})

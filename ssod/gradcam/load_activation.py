@@ -32,7 +32,7 @@ PROMPTS = ("photo of a [CLS]",)
 CLIP = {}
 TRAIN_IMG_DIR = '/home/danshili/softTeacher/SoftTeacher/data/coco/train2017/'
 VAL_IMG_DIR = '/home/danshili/softTeacher/SoftTeacher/data/coco/val2017/'
-SAVE_DIR = '/home/danshili/softTeacher/SoftTeacher/data/gradcam-numpy/'
+SAVE_DIR = '/data1/danshili/gradcam-numpy-ViT/'
 
 def _convert_image_to_rgb(image):
     return image.convert("RGB")
@@ -65,8 +65,17 @@ def reshape_with_padding(img):
 
         return img_resized
 
+def reshape_transform(tensor, height=7, width=7):
+    result = tensor[1:, :  , :].reshape(
+        height, width, tensor.size(1), tensor.size(2)).permute(2,0,1,3)
+    
+    # Bring the channels to the first dimension,
+    # like in CNNs.
+    result = result.transpose(2, 3).transpose(1, 2)
+    return result
+
 def main():
-    model, preprocess = clip.load("RN50")
+    model, preprocess = clip.load("ViT-B/32")
     model.cuda().eval()
     texts = []
     for cls in CLASSES:
@@ -75,9 +84,9 @@ def main():
     CLIP['model'] = model
     CLIP['preprocess'] = preprocess
     CLIP['texts'] = text_tokens
-
-    target_layers = [model.visual.layer4[0]]
-    cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=False)
+    target_layers = [model.visual.transformer.resblocks[-1].ln_1]   #ViT
+    #target_layers = [model.visual.layer4[0]]   #RN50
+    cam = GradCAMPlusPlus(model=model, target_layers=target_layers, use_cuda=False,reshape_transform=reshape_transform)
 
     #TODO: load all images, train and val, into this list.
     img_list_train = [TRAIN_IMG_DIR + f for f in os.listdir(TRAIN_IMG_DIR)]

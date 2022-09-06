@@ -104,7 +104,10 @@ class SoftTeacherGradCAM(SoftTeacher):
         return self.compute_pseudo_label_loss(student_info, teacher_info)
 
     def extract_teacher_info(self, img, img_metas, proposals=None, img_activated=None, **kwargs):
-        # pad activated image to the size of image, exactly what was done in the collate() function for original images
+        # pad activated image to the size of image, exactly what was done in the collate() function for original images.
+        # TODO: check
+        #   1. if the padding values are correct
+        #   2. if the overall implementation is exact
         if img_activated is not None:
             img_activated_padded = []
             for idx in range(len(img_activated)):
@@ -115,7 +118,6 @@ class SoftTeacherGradCAM(SoftTeacher):
                         # 'batch_input_shape'=(H,W); img_activated=(3,H,W), do not pad the first dim
                         pad[2*dim-1] = img_metas[0]['batch_input_shape'][-dim] - img_activated[idx][instance_idx].shape[-dim]
                     padded_img = F.pad(torch.Tensor(img_activated[idx][instance_idx]), pad, value=0)
-                    padded_img = Normalize(mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0])(padded_img)
                     inner.append(padded_img)
                 img_activated_padded.append(torch.stack(inner).to(img.device))
             img_activated = img_activated_padded

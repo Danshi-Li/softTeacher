@@ -17,6 +17,7 @@ from torchvision.ops import boxes as box_ops
 import json
 from mmdet.core.evaluation.bbox_overlaps import bbox_overlaps
 from mmdet.core.utils import filter_scores_and_topk, select_single_mlvl
+from mmdet.core import bbox_mapping_back, merge_aug_proposals
 
 unloader = transforms.ToPILImage()
 def tensor_to_PIL(tensor):
@@ -400,3 +401,66 @@ class RPNHeadWithCAM(RPNHead):
                 mlvl_tensors[i][:] for i in range(num_levels)
             ]
         return mlvl_tensor_list
+    
+    def simple_test_rpn(self, x, img_metas, x_activated=None):
+        """Test without augmentation, only for ``RPNHead`` and its variants,
+        e.g., ``GARPNHead``, etc.
+
+        Args:
+            x (tuple[Tensor]): Features from the upstream network, each is
+                a 4D-tensor.
+            img_metas (list[dict]): Meta info of each image.
+
+        Returns:
+            list[Tensor]: Proposals of each image, each item has shape (n, 5),
+                where 5 represent (tl_x, tl_y, br_x, br_y, score).
+        """
+        '''
+        print("x")
+        print(x)
+        print("img_metas")
+        print(img_metas)
+        print(len(img_metas))
+        '''
+        rpn_outs = self(x)
+        if x_activated is not None:
+            rpn_activated_out = [self(feat) for feat in x_activated]
+        else:
+            rpn_activated_out = None
+
+        proposal_list = self.get_bboxes(*rpn_outs,activated_features=rpn_activated_out, img_metas=img_metas)
+        return proposal_list
+
+    def aug_test_rpn(self, feats, img_metas):
+        """Test with augmentation for only for ``RPNHead`` and its variants,
+        e.g., ``GARPNHead``, etc.
+
+        Args:
+            feats (tuple[Tensor]): Features from the upstream network, each is
+                        a 4D-tensor.
+            img_metas (list[dict]): Meta info of each image.
+
+        Returns:
+            list[Tensor]: Proposals of each image, each item has shape (n, 5),
+                where 5 represent (tl_x, tl_y, br_x, br_y, score).
+        """
+        samples_per_gpu = len(img_metas[0])
+        aug_proposals = [[] for _ in range(samples_per_gpu)]
+        for x, img_meta in zip(feats, img_metas):
+            proposal_list = self.simple_test_rpn(x, img_meta)
+            for i, proposals in enumerate(proposal_list):
+                aug_proposals[i].append(proposals)
+        # reorganize the order of 'img_metas' to match the dimensions
+        # of 'aug_proposals'
+        aug_img_metas = []
+        for i in range(samples_per_gpu):
+            aug_img_meta = []
+            for j in range(len(img_metas)):
+                aug_img_meta.append(img_metas[j][i])
+            aug_img_metas.append(aug_img_meta)
+        # after merging, proposals will be rescaled to the original image size
+        merged_proposals = [
+            merge_aug_proposals(proposals, aug_img_meta, self.test_cfg)
+            for proposals, aug_img_meta in zip(aug_proposals, aug_img_metas)
+        ]
+        return merged_proposals

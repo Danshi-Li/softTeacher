@@ -31,9 +31,13 @@ class LoadCLIPActivatedImage:
     '''
     specification to be determined
     '''
-    def __init__(self,keep_ratio=0.01):
+    def __init__(self,keep_ratio=0.01,cls_thr=0.05):
         self.keep_ratio = keep_ratio
-        self.SAVE_DIR = '/home/danshili/softTeacher/SoftTeacher/data/gradcam-numpy/'
+        self.cls_thr = cls_thr
+        if cls_thr == 0.05:
+            self.SAVE_DIR = '/home/danshili/softTeacher/SoftTeacher/data/gradcam-numpy/'
+        else:
+            self.SAVE_DIR = '/home/danshili/softTeacher/SoftTeacher/data/gradcam-numpy-001/'
 
     def find_grayscale(self,map,rgb):
         bgr = (rgb[2],rgb[1],rgb[0])
@@ -73,8 +77,11 @@ class LoadCLIPActivatedImage:
         #TODO: find all activated images corresponding to given image
         for filename in os.listdir(self.SAVE_DIR):
             if image_number in filename:
-                #activation = np.load(self.SAVE_DIR+filename)[np.newaxis,:,:].transpose((1,2,0))
-                activation = np.load(self.SAVE_DIR+filename).transpose((1,2,0))
+                if self.cls_thr == 0.05:
+                    activation = np.load(self.SAVE_DIR+filename).transpose((1,2,0))
+                else:
+                    activation = np.load(self.SAVE_DIR+filename)[np.newaxis,:,:].transpose((1,2,0))
+                #
                 activated_img = activation * activation * original_img * (1 - self.keep_ratio) + original_img * self.keep_ratio
                 activated_img = activated_img / np.max(activated_img)
                 activated_img = np.uint8(255 * activated_img)

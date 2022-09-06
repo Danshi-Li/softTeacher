@@ -193,6 +193,7 @@ unsup_pipeline = [
 
 test_pipeline = [
     dict(type="LoadImageFromFile"),
+    dict(type="LoadCLIPActivatedImage",keep_ratio=0.01),
     dict(
         type="MultiScaleFlipAug",
         img_scale=(1333, 800),
@@ -203,7 +204,19 @@ test_pipeline = [
             dict(type="Normalize", **img_norm_cfg),
             dict(type="Pad", size_divisor=32),
             dict(type="ImageToTensor", keys=["img"]),
-            dict(type="Collect", keys=["img"]),
+            dict(type="Collect", keys=["img"],
+            meta_keys=(
+            "filename",
+            "ori_filename",
+            "ori_shape",
+            "img_shape",
+            "img_norm_cfg",
+            "pad_shape",
+            "scale_factor",
+            "flip",
+            "flip_direction",
+            "img_activated"
+        ),),
         ],
     ),
 ]
@@ -264,8 +277,8 @@ custom_hooks = [
 ]
 evaluation = dict(type="SubModulesDistEvalHook", interval=4000)
 optimizer = dict(type="SGD", lr=0.01, momentum=0.9, weight_decay=0.0001)
-lr_config = dict(step=[120000, 160000])
-runner = dict(_delete_=True, type="IterBasedRunner", max_iters=180000)
+lr_config = dict(step=[120000*2, 160000*2])
+runner = dict(_delete_=True, type="IterBasedRunner", max_iters=180000*2)
 checkpoint_config = dict(by_epoch=False, interval=4000, max_keep_ckpts=100)
 
 fp16 = dict(loss_scale="dynamic")
